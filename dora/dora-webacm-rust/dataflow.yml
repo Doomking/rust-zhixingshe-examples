@@ -1,0 +1,14 @@
+nodes:
+  - id: webcam
+    build: cargo build -p webcam
+    path: target/debug/webcam
+    inputs:
+      tick: dora/timer/millis/100
+    outputs:
+      - frame
+
+  - id: viewer
+    build: cargo build -p viewer
+    path: target/debug/viewer
+    inputs:
+      frame: webcam/frame
