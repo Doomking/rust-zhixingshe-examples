@@ -1,0 +1,29 @@
+nodes:
+  - id: temp_sensor
+    build: cargo build -p sensor_node
+    path: target/debug/sensor_node
+    inputs:
+      tick: dora/timer/millis/100
+    outputs:
+      - temp_raw
+
+  - id: data_processor
+    build: cargo build -p processor_node
+    path: target/debug/processor_node
+    inputs:
+      temp: temp_sensor/temp_raw
+    outputs:
+      - temp_smoothed
+      - temp_alert
+
+  - id: logger
+    build: cargo build -p logger_node
+    path: target/debug/logger_node
+    inputs:
+      smoothed: data_processor/temp_smoothed
+      alert: data_processor/temp_alert
+
+  - id: visualizer
+    path: visualizer-node/visualizer_node/main.py
+    inputs:
+      data: data_processor/temp_smoothed

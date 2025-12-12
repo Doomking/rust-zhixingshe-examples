@@ -1,0 +1,31 @@
+[project]
+name = "visualizer-node"
+version = "0.0.0"
+authors = [{ name = "Your Name", email = "email@email.com" }]
+description = "visualizer-node"
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.8"
+
+dependencies = [
+    "dora-rs >= 0.3.9",
+    "matplotlib>=3.7.5",
+    "pyarrow>=22.0.0"
+]
+
+[dependency-groups]
+dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
+
+[tool.uv.sources]
+default = [
+    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple" }
+]
+
+[project.scripts]
+visualizer-node = "visualizer_node.main:main"
+
+[tool.ruff.lint]
+extend-select = [
+  "D",   # pydocstyle
+  "UP"
+]
