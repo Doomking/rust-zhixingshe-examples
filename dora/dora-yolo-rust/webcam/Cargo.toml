@@ -1,0 +1,11 @@
+[package]
+name = "webcam"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dora-node-api = "0.3.13"
+opencv = { version = "0.97.2", features = ["videoio", "imgcodecs"] }
+anyhow = "1.0"

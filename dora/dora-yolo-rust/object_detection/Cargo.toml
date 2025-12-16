@@ -1,0 +1,24 @@
+[package]
+name = "object_detection"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dora-node-api = "0.3.13"
+opencv = { version = "0.97.2", features = ["videoio", "imgcodecs"] }
+anyhow = "1.0"
+
+# Candle 机器学习库
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = { version = "0.9", features = ["accelerate"] } # 使用 accelerate 优化
+hf-hub = "0.4" # 用于下载模型
+tokenizers = "0.15"
+
+# 图像处理辅助
+image = "0.24"
+byteorder = "1.5"
+
+tracing = "0.1.40"
