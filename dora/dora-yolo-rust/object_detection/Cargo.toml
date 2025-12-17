@@ -11,8 +11,8 @@ opencv = { version = "0.97.2", features = ["videoio", "imgcodecs"] }
 anyhow = "1.0"
 
 # Candle 机器学习库
-candle-core = "0.9"
-candle-nn = "0.9"
+candle-core = { version = "0.9", features = ["accelerate"] }
+candle-nn = { version = "0.9", features = ["accelerate"] }
 candle-transformers = { version = "0.9", features = ["accelerate"] } # 使用 accelerate 优化
 hf-hub = "0.4" # 用于下载模型
 tokenizers = "0.15"
@@ -22,3 +22,6 @@ image = "0.24"
 byteorder = "1.5"
 
 tracing = "0.1.40"
+
+[features]
+default = [] 

@@ -109,19 +109,31 @@ const LABELS: [&str; 80] = [
     "toothbrush",
 ];
 
+pub fn select_device() -> Result<Device, Box<dyn Error>> {
+    
+    // 尝试 Metal 设备 (如果 'metal' 特性已启用)
+    if let Ok(device) = Device::new_metal(0) {
+        println!("🚀 Using Metal device.");
+        return Ok(device);
+    }
+
+    // 回退到 CPU
+    println!("🐢 Using CPU device.");
+    Ok(Device::Cpu)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let (mut node, mut events) = DoraNode::init_from_env()?;
     let output = DataId::from("detections".to_owned());
     // 加载 YOLOv8 模型 (使用 HuggingFace 自动下载)
     println!("Loading YOLOv8 model...");
     // 优化后 (如果支持 CUDA):
-    let device = Device::new_cuda(0).unwrap_or_else(|_| {
-        eprintln!("CUDA not available, falling back to CPU.");
-        Device::Cpu
-    });
+    let device = select_device().unwrap();
     // let api = Api::new()?;
     // let repo = api.model("/lmz/candle-yolo-v8".to_string());
     // let model_file = repo.get("yolov8n.safetensors")?;
+
+    // https://hf-mirror.com/lmz/candle-yolo-v8/tree/main
     // 定义本地模型文件的路径
     let current_dir = env::current_dir().context("Failed to get current working directory")?;
 
