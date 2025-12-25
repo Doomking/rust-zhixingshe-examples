@@ -1,0 +1,9 @@
+#include <webots/robot.h>
+#include <webots/motor.h>
+#include <webots/gps.h>
+#include <webots/lidar.h>
+#include <webots/distance_sensor.h>
+#include <webots/camera.h>
+#include <webots/device.h>
+#include <webots/brake.h>
+#include <webots/inertial_unit.h>

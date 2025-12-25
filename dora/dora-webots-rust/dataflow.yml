@@ -1,0 +1,65 @@
+nodes:
+  - id: webots_bridge
+    build: cargo build -p webots-bridge
+    path: target/debug/webots-bridge
+    inputs:
+      tick: dora/timer/millis/100
+      control_command: control_op/control_command
+    outputs:
+      - image
+      - lidar_pc
+      - position
+      - speed
+      - opendrive
+      - objective_waypoints
+
+  - id: object_detection
+    build: cargo build -p object-detection
+    path: target/debug/object-detection
+    inputs:
+      frame: webots_bridge/image
+    outputs:
+      - detections
+
+  - id: viewer
+    build: cargo build -p viewer
+    path: target/debug/viewer
+    inputs:
+      detections: object_detection/detections
+      frame: webots_bridge/image
+      obstacles: obstacle_location/obstacles
+      position: webots_bridge/position
+      waypoints: planning_op/waypoints
+      control: control_op/control_command
+
+  - id: obstacle_location
+    build: cargo build -p obstacle-location
+    path: target/debug/obstacle-location
+    inputs:
+      lidar_pc: webots_bridge/lidar_pc
+      position: webots_bridge/position
+      obstacles_bbox: object_detection/detections
+    outputs:
+      - obstacles
+
+  - id: planning_op
+    build: cargo build -p planning-op
+    path: target/debug/planning-op
+    inputs:
+      position: webots_bridge/position
+      objective_waypoints: webots_bridge/objective_waypoints
+      obstacles: obstacle_location/obstacles
+      tick: dora/timer/millis/100
+    outputs:
+      - waypoints
+
+  - id: control_op
+    build: cargo build -p control-op
+    path: target/debug/control-op
+    inputs:
+      position: webots_bridge/position
+      speed: webots_bridge/speed
+      waypoints: planning_op/waypoints
+      tick: dora/timer/millis/100
+    outputs:
+      - control_command

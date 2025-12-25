@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["viewer", "webots-bridge", "object-detection", "webots-sys", "obstacle-location", "planning-op", "control-op"]

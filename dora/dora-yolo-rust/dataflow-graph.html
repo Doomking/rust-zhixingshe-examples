@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+</head>
+
+<body>
+    <div class="mermaid">
+        flowchart TB
+  object_detection["**object_detection**"]
+  viewer[/"**viewer**"\]
+  webcam["**webcam**"]
+subgraph ___dora___ [dora]
+  subgraph ___timer_timer___ [timer]
+    dora/timer/millis/100[\millis/100/]
+  end
+end
+  webcam -- frame --> object_detection
+  object_detection -- detections --> viewer
+  webcam -- frame --> viewer
+  dora/timer/millis/100 -- tick --> webcam
+
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({ startOnLoad: true, securityLevel: 'loose', theme: 'base' });
+    </script>
+</body>
+
+</html>

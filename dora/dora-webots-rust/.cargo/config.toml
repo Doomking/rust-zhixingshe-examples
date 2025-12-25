@@ -1,0 +1,6 @@
+[target.aarch64-apple-macos]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,/Applications/Webots.app/Contents/lib/controller",
+    "-L", "native=/Applications/Webots.app/Contents/lib/controller",
+    "-l", "dylib=Controller"
+]
