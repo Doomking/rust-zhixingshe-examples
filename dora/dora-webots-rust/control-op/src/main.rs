@@ -120,8 +120,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                     // 5. 转向平滑与限速
                     let max_step = 0.15; // 提高步进响应速度
                     let clamped_steer = target_steer.clamp(-MAX_STEER_ANGLE, MAX_STEER_ANGLE);
-                    let final_steer =
+                    let mut final_steer =
                         last_steering + (clamped_steer - last_steering).clamp(-max_step, max_step);
+
+                    // --- 专门针对右转角度调小的逻辑 ---
+                    let mut adjusted_steer = final_steer;
+
+                    // 假设在你的系统中，正值代表右转 (Positive = Right)
+                    // 如果实际运行发现左转变小了，请把 > 改为 <
+                    if adjusted_steer > 0.0 {
+                        adjusted_steer *= 0.5; // 这里 0.8 代表只保留 80% 的转向力度，你可以根据需要调整
+                    }
+
+                    // 确保调整后依然在物理限值内
+                    final_steer = adjusted_steer.clamp(-MAX_STEER_ANGLE, MAX_STEER_ANGLE);
+                    // ------------------------------
 
                     let mut final_speed = target_speed;
                     if final_steer.abs() > 0.4 {
