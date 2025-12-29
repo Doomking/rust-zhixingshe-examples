@@ -37,43 +37,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let y = current_pose[1];
                     let yaw = current_pose[5];
 
-                    // 1. 局部搜索最近点
-                    let search_start = last_closest_idx.saturating_sub(20);
-                    let search_end = (last_closest_idx + 200).min(planned_path.len());
-
-                    let (closest_idx, min_dist) = planned_path[search_start..search_end]
+                    // 1. 全局搜索最近点（去掉局部搜索，防止掉头时索引卡死）
+                    let (closest_idx, min_dist) = planned_path
                         .iter()
                         .enumerate()
-                        .map(|(i, p)| {
-                            (
-                                i + search_start,
-                                ((p[0] - x).powi(2) + (p[1] - y).powi(2)).sqrt(),
-                            )
-                        })
+                        .map(|(i, p)| (i, ((p[0] - x).powi(2) + (p[1] - y).powi(2)).sqrt()))
                         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
                         .unwrap();
-
                     last_closest_idx = closest_idx;
 
-                    // 2. 动态预瞄距离 (ld)
-                    // 如果距离路径极远，强制减小 ld 以增大转向角
-                    let ld = if min_dist > 40.0 {
-                        3.0 // 强迫车辆急转
-                    } else if min_dist > 10.0 {
-                        (8.0 + min_dist * 0.1).min(15.0)
-                    } else {
-                        (last_steering.abs() * -4.0 + 8.0).clamp(4.5, 8.0)
-                    };
+                    // 2. 动态预瞄距离
+                    let ld = if min_dist > 20.0 { 3.0f32 } else { 6.0f32 };
 
-                    // 3. 寻找目标点
-                    let target_pt_idx = planned_path[closest_idx..]
-                        .iter()
-                        .enumerate()
-                        .position(|(_, p)| ((p[0] - x).powi(2) + (p[1] - y).powi(2)).sqrt() > ld)
-                        .map(|i| i + closest_idx)
-                        .unwrap_or(planned_path.len() - 1);
-                    let target_pt = planned_path[target_pt_idx];
-
+                    // 3. 计算 Alpha
+                    let target_pt = planned_path[closest_idx]; // 掉头时直接瞄准最近点，确保转弯半径最小
                     let target_angle = (target_pt[1] - y).atan2(target_pt[0] - x);
                     let mut alpha = target_angle - yaw;
                     while alpha > std::f32::consts::PI {
@@ -84,71 +61,60 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
 
                     let mut target_speed: f32;
-                    let target_steer: f32;
+                    let mut target_steer: f32;
 
-                    // 4. 核心状态机逻辑
-                    if alpha.abs() > 1.6 {
-                        // 【强制调头模式】夹角过大时，无视 Pure Pursuit，直接打死
+                    // 4. 核心状态机逻辑优化
+                    if alpha.abs() > 1.2 {
+                        // 【掉头模式】
                         if uturn_lock == 0.0 {
                             uturn_lock = if alpha > 0.0 { 1.0 } else { -1.0 };
                         }
-                        target_steer = uturn_lock * MAX_STEER_ANGLE * 1.0; // 满打转向
-                        target_speed = 3.8; // 降低速度以获得更小的物理转弯半径
+                        target_steer = uturn_lock * MAX_STEER_ANGLE;
+                        // 关键：大幅降低掉头速度，防止转圈过猛
+                        target_speed = 1.2;
                     } else if uturn_lock != 0.0 {
-                        // 【调头保持/回正模式】
-                        // 增加判定：如果 alpha 还是很大 (>0.8)，继续维持高强度转向，不急着回正
-                        if alpha.abs() < 0.4 {
-                            uturn_lock = 0.0; // 只有对得比较准了才释放锁定
-                            let curvature = 2.0 * alpha.sin() / ld;
-                            target_steer = (curvature * WHEEL_BASE).atan();
+                        // 【掉头保持模式】
+                        if alpha.abs() < 0.3 {
+                            uturn_lock = 0.0; // 角度很小时才解除锁定
+                            target_steer = 0.0;
                         } else {
-                            // 依然在弯道中，维持 90% 的转向力，防止回正过早导致压外线
-                            target_steer = uturn_lock * MAX_STEER_ANGLE * 0.95;
+                            target_steer = uturn_lock * MAX_STEER_ANGLE * 0.8;
                         }
-                        target_speed = 4.5;
+                        target_speed = 2.0;
                     } else {
                         // 【正常循迹模式】
                         let curvature = 2.0 * alpha.sin() / ld;
                         target_steer = (curvature * WHEEL_BASE).atan();
-                        target_speed = if min_dist > 5.0 {
-                            6.0
-                        } else {
-                            planned_path[closest_idx][2]
-                        };
+                        target_speed = 4.0;
                     }
 
-                    // 5. 转向平滑与限速
-                    let max_step = 0.15; // 提高步进响应速度
-                    let clamped_steer = target_steer.clamp(-MAX_STEER_ANGLE, MAX_STEER_ANGLE);
-                    let mut final_steer =
-                        last_steering + (clamped_steer - last_steering).clamp(-max_step, max_step);
+                    // 5. 转向处理（解决右转过快问题）
+                    let mut final_steer = target_steer.clamp(-MAX_STEER_ANGLE, MAX_STEER_ANGLE);
 
-                    // --- 专门针对右转角度调小的逻辑 ---
-                    let mut adjusted_steer = final_steer;
-
-                    // 假设在你的系统中，正值代表右转 (Positive = Right)
-                    // 如果实际运行发现左转变小了，请把 > 改为 <
-                    if adjusted_steer > 0.0 {
-                        adjusted_steer *= 0.5; // 这里 0.8 代表只保留 80% 的转向力度，你可以根据需要调整
+                    // --- 针对右转快了的专项修正 ---
+                    // 如果 Steering > 0 (右转)，对其进行缩放抑制
+                    if final_steer > 0.0 {
+                        // 方案：使用非线性缩减，角度越大抑制越强
+                        final_steer *= 0.199;
                     }
+                    // ----------------------------
 
-                    // 确保调整后依然在物理限值内
-                    final_steer = adjusted_steer.clamp(-MAX_STEER_ANGLE, MAX_STEER_ANGLE);
-                    // ------------------------------
+                    // 6. 步进平滑（防止Webots物理震荡）
+                    let max_step = 0.1;
+                    final_steer =
+                        last_steering + (final_steer - last_steering).clamp(-max_step, max_step);
 
                     let mut final_speed = target_speed;
-                    if final_steer.abs() > 0.4 {
-                        final_speed = final_speed.min(4.0);
-                    }
-                    if min_dist > 30.0 {
-                        final_speed = final_speed.min(5.5); // 确保远距离回归时不会因为速度过快冲出去
+                    // 保护逻辑：转向角大时强制限速
+                    if final_steer.abs() > 0.3 {
+                        final_speed = final_speed.min(1.5);
                     }
 
                     last_steering = final_steer;
 
                     println!(
-                        "Idx: {}, Dist: {:.1}m, Alpha: {:.2}, Steer: {:.2}, V: {:.1}, Ld: {:.1}",
-                        closest_idx, min_dist, alpha, final_steer, final_speed, ld
+                        "Dist: {:.1}m, Alpha: {:.2}, Steer: {:.2}, V: {:.1}, Lock: {}",
+                        min_dist, alpha, final_steer, final_speed, uturn_lock
                     );
 
                     node.send_output(
