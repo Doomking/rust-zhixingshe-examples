@@ -145,8 +145,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     // 3. 绘制 HUD 仪表盘文本
                     let hud_color = Scalar::new(255.0, 255.0, 255.0, 0.0);
                     let pos_info = format!(
-                        "GPS: X:{:.1} Z:{:.1} Yaw:{:.2}",
-                        current_position[0], current_position[2], current_position[5]
+                        "GPS: X:{:.1} Y:{:.1} Yaw:{:.2}",
+                        current_position[0], current_position[1], current_position[5]
                     );
                     imgproc::put_text(
                         &mut display_frame,

@@ -113,6 +113,7 @@ impl WebotsRobot {
     pub fn new() -> Self {
         unsafe {
             wb_robot_init();
+            wbu_driver_init();
             let time_step = wb_robot_get_basic_time_step() as i32;
 
             // WebotsRobot::get_device_list();
@@ -309,18 +310,22 @@ impl WebotsRobot {
     /// 核心优化：统一设置所有动力轮的速度
     pub fn set_drive_speed(&self, speed: f64) {
         unsafe {
-            for &motor in &self.drive_motors {
-                wb_motor_set_velocity(motor, speed);
-            }
+            // for &motor in &self.drive_motors {
+            //     wb_motor_set_velocity(motor, speed);
+            // }
+            // 直接设置目标巡航速度，driver 库会自动处理所有电机的同步
+            wbu_driver_set_cruising_speed(speed);
         }
     }
 
     /// 控制转向
     pub fn set_steering(&self, angle: f64) {
         unsafe {
-            if self.steering_wheel != 0 {
-                wb_motor_set_position(self.steering_wheel, angle);
-            }
+            // if self.steering_wheel != 0 {
+            //     wb_motor_set_position(self.steering_wheel, angle);
+            // }
+            // angle 应为弧度。BmwX5 的物理极限通常在 +-0.5 弧度左右
+            wbu_driver_set_steering_angle(angle);
         }
     }
 

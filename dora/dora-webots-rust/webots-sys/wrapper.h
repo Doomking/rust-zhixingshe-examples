@@ -7,3 +7,4 @@
 #include <webots/device.h>
 #include <webots/brake.h>
 #include <webots/inertial_unit.h>
+#include <webots/vehicle/driver.h>

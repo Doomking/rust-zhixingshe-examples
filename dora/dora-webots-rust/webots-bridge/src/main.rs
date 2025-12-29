@@ -91,6 +91,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     )?;
 
                     println!("webots-bridge gps pos: {:?}", pos);
+                    println!("webots-bridge yew: {:?}", att[2]);
+
                     // 4. Speed
                     let speed = vec![robot.get_speed()];
                     node.send_output(
@@ -124,20 +126,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("control_command: {:?}", cmd);
 
                     let steering = cmd[0] as f64;
-                    let throttle = cmd[1] as f64;
-                    let brake = cmd[2] as f64;
+                    // let throttle = cmd[1] as f64;
+                    // let brake = cmd[2] as f64;
+                    let speed = cmd[1] as f64;
 
                     // 应用到 Webots 电机
                     robot.set_steering(steering);
 
                     // 简单的动力模型：速度 = 油门 * 最大速度 - 刹车系数
-                    let target_vel = if brake > 0.1 {
-                        0.0
-                    } else {
-                        throttle * 120.0 // 假设最大车速 20m/s
-                    };
-                    println!("webots-bridge: speed: {}", target_vel);
-                    robot.set_drive_speed(target_vel);
+                    // let target_vel = if brake > 0.1 {
+                    //     0.0
+                    // } else {
+                    //     throttle * 120.0 // 假设最大车速 20m/s
+                    // };
+                    println!("webots-bridge: speed: {}", speed);
+                    robot.set_drive_speed(speed);
                 }
                 other => eprintln!("Received unknown input: {:?}", other),
             },
