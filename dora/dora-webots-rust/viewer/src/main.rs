@@ -161,29 +161,54 @@ fn main() -> Result<(), Box<dyn Error>> {
                     )?;
 
                     // 4. 绘制 2D 小地图 (Bird's Eye View)
-                    let map_size = 200;
+                    let map_size = 350;
+                    let scale = 2.0;
+                    // let margin = 20; // 距离边缘的距离
                     let map_rect = Rect::new(cols - map_size - 20, 20, map_size, map_size);
-                    // 背景
-                    // imgproc::rectangle(
-                    //     &mut display_frame,
-                    //     map_rect,
-                    //     Scalar::new(30.0, 30.0, 30.0, 0.0),
-                    //     -1,
-                    //     8,
-                    //     0,
-                    // )?;
                     let center = Point::new(map_rect.x + map_size / 2, map_rect.y + map_size / 2);
+                    let mut overlay = display_frame.clone();
+                    imgproc::rectangle(
+                        &mut overlay,
+                        map_rect,
+                        Scalar::new(50.0, 50.0, 50.0, 0.0), // 深灰色背景
+                        -1,
+                        8,
+                        0,
+                    )?;
 
-                    // 绘制 3D 障碍物点 (红色点)
-                    for obs in &obstacles_3d {
-                        let dx = (obs[0] - current_position[0]) * 5.0; // 比例尺: 1m = 5px
-                        let dz = (obs[1] - current_position[2]) * 5.0;
-                        let p = Point::new(center.x + dx as i32, center.y - dz as i32);
+                    // --- 4.2 绘制规划路径 ---
+                    let step = 2;
+                    for wp in planned_path.iter().step_by(step) {
+                        // 计算相对坐标
+                        let dx = (wp[0] - current_position[0]) * scale;
+                        let dy = (wp[1] - current_position[1]) * scale;
+
+                        let p = Point::new(center.x + dx as i32, center.y - dy as i32);
+
                         if map_rect.contains(p) {
                             imgproc::circle(
                                 &mut display_frame,
                                 p,
-                                3,
+                                2,
+                                Scalar::new(0.0, 255.0, 255.0, 0.0),
+                                -1,
+                                8,
+                                0,
+                            )?;
+                        }
+                    }
+
+                    // --- 4.3 绘制 3D 障碍物 ---
+                    for obs in &obstacles_3d {
+                        let dx = (obs[0] - current_position[0]) * scale;
+                        let dy = (obs[1] - current_position[1]) * scale;
+                        let p = Point::new(center.x + dx as i32, center.y - dy as i32);
+
+                        if map_rect.contains(p) {
+                            imgproc::circle(
+                                &mut display_frame,
+                                p,
+                                5, // 障碍物稍微画大一点
                                 Scalar::new(0.0, 0.0, 255.0, 0.0),
                                 -1,
                                 8,
@@ -192,45 +217,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
 
-                    // 绘制规划路径 (青色点序列)
-                    for wp in &planned_path {
-                        let dx = (wp[0] - current_position[0]) * 5.0;
-                        let dz = (wp[1] - current_position[2]) * 5.0;
-                        let p = Point::new(center.x + dx as i32, center.y - dz as i32);
-                        if map_rect.contains(p) {
-                            println!("viewer waypoint: {:?}", p);
-                            // 画一个亮黄色的点代表目标
-                            imgproc::circle(
-                                &mut display_frame,
-                                p,
-                                5,
-                                Scalar::new(0.0, 255.0, 255.0, 0.0),
-                                -1,
-                                8,
-                                0,
-                            )?;
-                            // imgproc::circle(
-                            //     &mut display_frame,
-                            //     p,
-                            //     1,
-                            //     Scalar::new(255.0, 255.0, 0.0, 0.0),
-                            //     -1,
-                            //     8,
-                            //     0,
-                            // )?;
-                        }
-                    }
-
-                    // 绘制自车位置 (白色中心点)
-                    // imgproc::circle(
-                    //     &mut display_frame,
-                    //     center,
-                    //     4,
-                    //     Scalar::new(255.0, 255.0, 255.0, 0.0),
-                    //     -1,
-                    //     8,
-                    //     0,
-                    // )?;
+                    // --- 4.4 绘制自车 (中心) ---
+                    imgproc::circle(
+                        &mut display_frame,
+                        center,
+                        6,
+                        Scalar::new(255.0, 255.0, 255.0, 0.0), // 白色表示自车
+                        -1,
+                        8,
+                        0,
+                    )?;
 
                     // 5. 显示并刷新
                     highgui::imshow(win_name, &display_frame)?;

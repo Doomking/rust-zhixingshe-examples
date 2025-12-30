@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut planned_path: Vec<[f32; 3]> = Vec::new();
     let mut last_steering = 0.0f32;
     let mut uturn_lock: f32 = 0.0;
-    let mut last_closest_idx: usize = 0;
+    // let mut last_closest_idx: usize = 0;
 
     while let Some(event) = events.recv() {
         match event {
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .chunks_exact(3)
                         .map(|c| [c[0], c[1], c[2]])
                         .collect();
-                    last_closest_idx = 0;
+                    // last_closest_idx = 0;
                 }
                 "tick" => {
                     if planned_path.is_empty() {
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .map(|(i, p)| (i, ((p[0] - x).powi(2) + (p[1] - y).powi(2)).sqrt()))
                         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
                         .unwrap();
-                    last_closest_idx = closest_idx;
+                    // last_closest_idx = closest_idx;
 
                     // 2. 动态预瞄距离
                     let ld = if min_dist > 20.0 { 3.0f32 } else { 6.0f32 };
@@ -60,8 +60,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         alpha += 2.0 * std::f32::consts::PI;
                     }
 
-                    let mut target_speed: f32;
-                    let mut target_steer: f32;
+                    let target_speed: f32;
+                    let target_steer: f32;
 
                     // 4. 核心状态机逻辑优化
                     if alpha.abs() > 1.2 {
