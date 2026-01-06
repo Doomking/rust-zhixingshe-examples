@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="向量模拟项目">
+    <meta name="keywords" content="WASM, Rust, 向量, 模拟">
+    <meta name="author" content="开发者">
+    <title>向量模拟项目</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f4f4f4;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* 容器整体样式：深色背景，极简科技风 */
+        .benchmark-container {
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 30px;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            text-align: center;
+        }
+
+        .benchmark-container h2 {
+            color: #f74c00;
+            /* Rust 标志性的橙色 */
+            margin-bottom: 10px;
+            font-size: 1.5rem;
+        }
+
+        .benchmark-container p {
+            color: #a0a0a0;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        /* 按钮区域 */
+        .actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin: 30px 0;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 0.95rem;
+        }
+
+        /* JS 按钮：黄色系 */
+        #runJS {
+            background-color: #f7df1e;
+            color: #323330;
+        }
+
+        #runJS:hover {
+            background-color: #ffec3d;
+            transform: translateY(-2px);
+        }
+
+        /* Wasm 按钮：Rust 红色系 */
+        #runWasm {
+            background-color: #ce412b;
+            color: white;
+        }
+
+        #runWasm:hover {
+            background-color: #e0543e;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(206, 65, 43, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        /* 结果展示区域 */
+        .results {
+            background-color: #252525;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #333;
+        }
+
+        .results p {
+            margin: 10px 0;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 1.1rem;
+            color: #ffffff;
+        }
+
+        .results span {
+            color: #00ffc3;
+            /* 亮眼的青色显示数字 */
+            font-weight: bold;
+        }
+
+        /* 结论文字 */
+        #conclusion {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #444;
+            color: #ffcc00;
+            font-size: 1.2rem;
+            min-height: 1.5em;
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 480px) {
+            .actions {
+                flex-direction: column;
+            }
+
+            .benchmark-container {
+                margin: 10px;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="benchmark-container">
+            <h2>Wasm AI 算力竞技场</h2>
+            <p>任务：执行 1,000,000 次 512 维向量余弦相似度计算</p>
+
+            <div class="actions">
+                <button id="runJS">运行纯 JavaScript</button>
+                <button id="runWasm">运行 Rust Wasm</button>
+            </div>
+
+            <div class="results">
+                <p>JS 耗时: <span id="jsTime">---</span> ms</p>
+                <p>Wasm 耗时: <span id="wasmTime">---</span> ms</p>
+                <h3 id="conclusion">等待测试...</h3>
+            </div>
+        </div>
+        </main>
+    </div>
+
+    <script type="module">
+        import init, { cosine_similarity_rust, cosine_similarity_rust_benchmark } from "./pkg/vector_sim.js";
+
+        // 纯 JS 实现的相同逻辑
+        function cosineSimilarityJS(vecA, vecB) {
+            let dotProduct = 0.0;
+            let normA = 0.0;
+            let normB = 0.0;
+            for (let i = 0; i < vecA.length; i++) {
+                dotProduct += vecA[i] * vecB[i];
+                normA += vecA[i] * vecA[i];
+                normB += vecB[i] * vecB[i];
+            }
+            return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+        }
+
+        function cosineSimilarityJSBenchmark(vecA, vecB, iterations) {
+            let lastResult = 0.0;
+            for (let i = 0; i < iterations; i++) {
+                lastResult = cosineSimilarityJS(vecA, vecB);
+            }
+            return lastResult;
+        }
+        async function setup() {
+            await init();
+
+            const ITERATIONS = 1000000;
+            const vecA = new Float32Array(512).fill(0.123);
+            const vecB = new Float32Array(512).fill(0.456);
+
+            let timeJS = 0;
+            let timeWasm = 0;
+
+            // --- JS 按钮逻辑 ---
+            document.getElementById('runJS').onclick = () => {
+                const start = performance.now();
+                // for (let i = 0; i < ITERATIONS; i++) {
+                //     cosineSimilarityJS(vecA, vecB);
+                // }
+                const jsResult = cosineSimilarityJSBenchmark(vecA, vecB, ITERATIONS);
+                timeJS = performance.now() - start;
+                document.getElementById('jsTime').innerText = timeJS.toFixed(2);
+                updateConclusion();
+                console.log(`JS 结果: ${jsResult}`);
+            };
+
+            // --- Wasm 按钮逻辑 ---
+            document.getElementById('runWasm').onclick = () => {
+                const start = performance.now();
+                // for (let i = 0; i < ITERATIONS; i++) {
+                //     cosine_similarity_rust(vecA, vecB);
+                // }
+                const rustResult = cosine_similarity_rust_benchmark(vecA, vecB, ITERATIONS);
+                timeWasm = performance.now() - start;
+                document.getElementById('wasmTime').innerText = timeWasm.toFixed(2);
+                updateConclusion();
+                console.log(`Rust 结果: ${rustResult}`);
+            };
+
+            function updateConclusion() {
+                if (timeJS > 0 && timeWasm > 0) {
+                    const ratio = (timeJS / timeWasm).toFixed(1);
+                    document.getElementById('conclusion').innerText = `🚀 Rust Wasm 比 JS 快了约 ${ratio} 倍！`;
+                }
+            }
+        }
+
+        setup();
+    </script>
+</body>
+
+</html>
