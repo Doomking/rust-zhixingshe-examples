@@ -1,0 +1,31 @@
+[package]
+name = "candle-senti-pulse"
+version = "0.1.0"
+edition = "2021"
+authors = ["Rust知行社"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# 核心计算引擎
+candle-core = { git = "https://github.com/huggingface/candle.git" }
+candle-nn = { git = "https://github.com/huggingface/candle.git" }
+candle-transformers = { git = "https://github.com/huggingface/candle.git" }
+
+# 分词与序列化 - 核心修复点：添加对 WASM 的支持特性
+tokenizers = { version = "0.15", default-features = false, features = ["unstable_wasm"] }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Wasm 适配与调试
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[profile.release]
+lto = true
+opt-level = 3

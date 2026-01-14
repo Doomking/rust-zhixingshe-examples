@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Wasm AI 情绪中枢</title>
+        <link rel="stylesheet" href="style.css" />
+    </head>
+    <body>
+        <canvas id="particle-canvas"></canvas>
+
+        <div class="container">
+            <h1 class="neon-title">AI 情绪中枢 <small>Candle + Wasm</small></h1>
+
+            <div id="loading-screen">
+                <div class="loader"></div>
+                <p id="status-text">正在初始化神经元网络...</p>
+            </div>
+
+            <div id="main-content" class="hidden">
+                <div class="input-wrapper">
+                    <div
+                        id="user-input-container"
+                        contenteditable="true"
+                        spellcheck="false"
+                    >
+                        输入一段英文评价，看看 AI 的反应... (例如: The visuals
+                        are stunning, but the plot is weak.)
+                    </div>
+                </div>
+
+                <div class="viz-container">
+                    <div class="thermometer-group">
+                        <div class="thermometer">
+                            <div id="neg-mercury" class="mercury neg"></div>
+                        </div>
+                        <label class="neon-red">NEGATIVE</label>
+                    </div>
+                    <div class="thermometer-group">
+                        <div class="thermometer">
+                            <div id="neu-mercury" class="mercury neu"></div>
+                        </div>
+                        <label
+                            style="
+                                color: #a855f7;
+                                text-shadow: 0 0 10px #a855f7;
+                            "
+                            >NEUTRAL</label
+                        >
+                    </div>
+                    <div class="thermometer-group">
+                        <div class="thermometer">
+                            <div id="pos-mercury" class="mercury pos"></div>
+                        </div>
+                        <label class="neon-blue">POSITIVE</label>
+                    </div>
+                </div>
+
+                <div id="heatmap-strip" class="heatmap-strip"></div>
+
+                <p id="stats-text">Ready.</p>
+            </div>
+        </div>
+        <script type="module" src="main.js"></script>
+    </body>
+</html>
