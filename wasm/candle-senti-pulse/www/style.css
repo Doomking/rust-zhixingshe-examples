@@ -32,6 +32,7 @@ body {
     border-radius: 24px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    opacity: 0.6;
 }
 
 .neon-title {
@@ -64,9 +65,19 @@ body {
     padding: 20px;
     font-size: 1.2rem;
     line-height: 1.6;
-    color: #ccc;
+    color: #eee; /* 提高亮度 */
     outline: none;
-    white-space: pre-wrap; /* 保留换行 */
+    white-space: pre-wrap;
+    text-align: left; /* 强制左对齐 */
+    display: block; /* 确保作为块级元素 */
+    cursor: text;
+}
+
+#user-input-container:empty:before {
+    content: "输入一段文字，看看 AI 的情绪反应...";
+    color: rgba(255, 255, 255, 0.2);
+    pointer-events: none; /* 确保点击 placeholder 也能聚焦输入框 */
+    display: block; /* 解决某些浏览器下的对齐问题 */
 }
 
 /* 焦点态 */
@@ -76,24 +87,27 @@ body {
 }
 
 /* 3. 文字发光特效 CSS */
-/* 积极词汇高亮 */
+/* 增强高亮视觉：加入背景发光和更鲜艳的文字颜色 */
 .glow-pos {
     color: #fff;
+    background: rgba(0, 242, 255, 0.3); /* 加入淡淡的背景色 */
+    padding: 0 4px;
+    border-radius: 4px;
     text-shadow:
-        0 0 8px var(--neon-blue),
-        0 0 15px var(--neon-blue);
-    font-weight: bold;
-    animation: pulse-blue 2s infinite alternate;
+        0 0 10px var(--neon-blue),
+        0 0 20px var(--neon-blue);
+    font-weight: 600;
 }
 
-/* 消极词汇高亮 */
 .glow-neg {
     color: #fff;
+    background: rgba(255, 51, 102, 0.3);
+    padding: 0 4px;
+    border-radius: 4px;
     text-shadow:
-        0 0 8px var(--neon-red),
-        0 0 15px var(--neon-red);
-    font-weight: bold;
-    animation: pulse-red 1.5s infinite alternate; /* 消极闪烁更快 */
+        0 0 10px var(--neon-red),
+        0 0 20px var(--neon-red);
+    font-weight: 600;
 }
 
 @keyframes pulse-blue {
@@ -189,4 +203,37 @@ body {
 }
 .hidden {
     display: none;
+}
+
+/* 震动特效 */
+.shake-effect {
+    animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@keyframes shake {
+    10%,
+    90% {
+        transform: translate3d(-1px, 0, 0);
+    }
+    20%,
+    80% {
+        transform: translate3d(2px, 0, 0);
+    }
+    30%,
+    50%,
+    70% {
+        transform: translate3d(-4px, 0, 0);
+    }
+    40%,
+    60% {
+        transform: translate3d(4px, 0, 0);
+    }
+}
+
+/* 动态背景颜色容器 */
+.container {
+    /* ...原有样式... */
+    transition:
+        box-shadow 0.5s,
+        border-color 0.5s;
 }

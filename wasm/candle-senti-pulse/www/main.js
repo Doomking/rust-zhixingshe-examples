@@ -55,20 +55,17 @@ class Particle {
   }
 
   draw() {
-    // 基于三种情绪概率进行颜色加权混合
-    const r = Math.floor(
-      globalMood.neg * 255 + globalMood.pos * 0 + globalMood.neu * 168,
-    );
-    const g = Math.floor(
-      globalMood.neg * 51 + globalMood.pos * 242 + globalMood.neu * 85,
-    );
-    const b = Math.floor(
-      globalMood.neg * 102 + globalMood.pos * 255 + globalMood.neu * 247,
-    );
+    /// 强化颜色计算：确保 neg 占主导时 R 通道强制拉满
+    const r = Math.floor(globalMood.neg * 255 + globalMood.neu * 168);
+    const g = Math.floor(globalMood.pos * 242 + globalMood.neu * 85);
+    const b = Math.floor(globalMood.pos * 255 + globalMood.neu * 247);
 
-    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${this.alpha})`;
+    // 氛围补偿：负面越高，粒子稍微变大一点，增加压迫感
+    const dynamicSize = this.size * (1 + globalMood.neg * 1.5);
+
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${this.alpha + globalMood.neg * 0.3})`;
     ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    ctx.arc(this.x, this.y, dynamicSize, 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -123,35 +120,62 @@ function debounce(func, wait) {
   };
 }
 
-// 处理文本高亮 (核心：替换 innerHTML)
-// 注意：光标位置管理在 contenteditable 中非常复杂。
-// 这个演示版本在每次推理后会重置光标到末尾。生产环境需要更复杂的光标恢复逻辑。
+// 记录上一次的纯文本，避免无意义的重绘
+let lastText = "";
+
 function highlightText(text, negProb, posProb) {
-  // 简单的正则分割单词，保留标点
-  let words = text.split(/([\s,.!?;:()]+)/);
+  if (text === lastText || !text.trim()) return;
 
-  let highlightedHtml = words
-    .map((word) => {
-      const lowerWord = word.toLowerCase().trim();
-      if (SIMULATED_ATTENTION.pos.includes(lowerWord) && posProb > 0.6) {
-        return `<span class="glow-pos">${word}</span>`;
-      } else if (SIMULATED_ATTENTION.neg.includes(lowerWord) && negProb > 0.6) {
-        return `<span class="glow-neg">${word}</span>`;
+  let html = text;
+  let modified = false;
+
+  // 只有情绪极化明显时才执行替换
+  if (posProb > 0.6) {
+    SIMULATED_ATTENTION.pos.forEach((word) => {
+      const regex = new RegExp(word, "g");
+      if (regex.test(html)) {
+        html = html.replace(regex, `<span class="glow-pos">${word}</span>`);
+        modified = true;
       }
-      return word;
-    })
-    .join("");
-
-  // 只有当内容真的改变时才更新，减少光标跳动
-  if (inputContainer.innerHTML !== highlightedHtml) {
-    // 保存当前纯文本内容以进行对比，避免死循环
-    const currentPlainText = inputContainer.innerText;
-    if (currentPlainText === text) {
-      inputContainer.innerHTML = highlightedHtml;
-      // 将光标移动到末尾 (简易处理)
-      placeCaretAtEnd(inputContainer);
-    }
+    });
   }
+
+  if (negProb > 0.6) {
+    SIMULATED_ATTENTION.neg.forEach((word) => {
+      const regex = new RegExp(word, "g");
+      if (regex.test(html)) {
+        html = html.replace(regex, `<span class="glow-neg">${word}</span>`);
+        modified = true;
+      }
+    });
+  }
+
+  // 只有内容真正改变了才重绘，防止光标死循环
+  if (modified && inputContainer.innerHTML !== html) {
+    // 记录光标位置（稍微复杂的逻辑，但对体验至关重要）
+    const selection = window.getSelection();
+    const offset = selection.focusOffset;
+
+    inputContainer.innerHTML = html;
+
+    // 简单处理：将光标放回末尾
+    placeCaretAtEnd(inputContainer);
+  } else if (!modified && inputContainer.querySelector("span")) {
+    // 如果没有关键词但之前有高亮，回退到纯文本
+    inputContainer.innerText = text;
+    placeCaretAtEnd(inputContainer);
+  }
+
+  lastText = text;
+}
+
+// 辅助：当输入为空时清空状态
+function resetUI() {
+  inputContainer.innerHTML = ""; // 彻底清空，让 :empty placeholder 出现
+  document.getElementById("neg-mercury").style.height = "5%";
+  document.getElementById("pos-mercury").style.height = "5%";
+  document.getElementById("neu-mercury").style.height = "5%";
+  globalMood.targetSpeed = 0.5;
 }
 
 // 将光标放置到 contenteditable 元素末尾的辅助函数
@@ -170,6 +194,28 @@ function placeCaretAtEnd(el) {
   }
 }
 
+function updateVibe(result) {
+  const { negative, positive, neutral } = result;
+  const container = document.querySelector(".container");
+
+  if (negative > 0.9) {
+    document.body.classList.add("shake-effect");
+    setTimeout(() => document.body.classList.remove("shake-effect"), 500);
+  }
+
+  // 动态调整容器边框光晕，增强氛围感
+  if (positive > 0.7) {
+    container.style.boxShadow = `0 20px 40px rgba(0, 242, 255, ${positive * 0.3})`;
+    container.style.borderColor = `rgba(0, 242, 255, ${positive * 0.5})`;
+  } else if (negative > 0.7) {
+    container.style.boxShadow = `0 20px 40px rgba(255, 51, 102, ${negative * 0.3})`;
+    container.style.borderColor = `rgba(255, 51, 102, ${negative * 0.5})`;
+  } else {
+    container.style.boxShadow = `0 20px 40px rgba(0, 0, 0, 0.4)`;
+    container.style.borderColor = `rgba(255, 255, 255, 0.1)`;
+  }
+}
+
 async function startApp() {
   await init();
   const status = document.getElementById("status-text");
@@ -177,7 +223,8 @@ async function startApp() {
 
   try {
     // 修改为中文模型资源
-    const baseUrl = "./model/jackietung/bert-base-chinese-finetuned-sentiment/";
+    // const baseUrl = "./model/jackietung/bert-base-chinese-finetuned-sentiment/";
+    const baseUrl = "./model/uer/roberta-base-finetuned-jd-binary-chinese/";
 
     status.innerText = "正在接收卫星数据 (下载模型权重)...";
     // 注意：文件名可能需要根据仓库实际情况调整
@@ -216,7 +263,10 @@ async function startApp() {
     // 定义推理主逻辑
     const performInference = () => {
       const text = inputContainer.innerText;
-      if (!text.trim()) return;
+      if (!text.trim()) {
+        resetUI();
+        return;
+      }
 
       const t0 = performance.now();
       // 1. 调用 Rust Wasm (假设返回对象包含 neg, pos, neu)
@@ -242,36 +292,49 @@ async function startApp() {
       heatmapIndex = (heatmapIndex + 1) % 20;
 
       // 4. 更新统计数据
-      stats.innerText = `Inference Time: ${(t1 - t0).toFixed(1)}ms | Neg: ${(neg * 100).toFixed(0)}% Neu: ${(neu * 100).toFixed(0)}% Pos: ${(pos * 100).toFixed(0)}%`;
+      const n_pct = Math.round((neg / (neg + pos + neu)) * 100);
+      const p_pct = Math.round((pos / (neg + pos + neu)) * 100);
+      // 中性值直接用 100 减去其他两项，确保总和永远是 100
+      const u_pct = 100 - n_pct - p_pct;
 
+      stats.innerText = `Inference Time: ${(t1 - t0).toFixed(1)}ms | Neg: ${n_pct}% Neu: ${u_pct}% Pos: ${p_pct}%`;
       // 5. 驱动粒子风暴
       // 中性时速度最平稳 (targetSpeed 较低)
       // globalMood.targetSpeed = 0.5 + neg * 2.5 + pos * 0.5;
       // globalMood.chaos = 0.1 + neg * 0.5;
 
       // 计算综合情绪分 (-1 到 1)
+      // 在 performInference 函数中修改
       const sentimentScore = pos * 1 + neu * 0 + neg * -1;
 
-      // 映射到粒子速度：分数绝对值越大（情绪越强烈），速度越快
-      globalMood.targetSpeed = 0.5 + Math.abs(sentimentScore) * 2.5;
+      // 限制最高速度倍率，防止粒子飞得太快
+      const speedMultiplier = Math.min(Math.abs(sentimentScore), 0.8);
+      globalMood.targetSpeed = 0.5 + speedMultiplier * 3.0;
 
-      // 映射到混乱度：负面情绪（分数越负）混乱度越高
-      globalMood.chaos = neg > 0.5 ? neg * 0.8 : 0.1;
+      // 负面情绪时，增加水平晃动量（混乱度）
+      globalMood.chaos = neg * 1.2;
 
-      // 更新全局情绪比例用于颜色计算
-      globalMood.neg = neg;
-      globalMood.pos = pos;
-      globalMood.neu = neu;
+      // 修正全局情绪比例的对比度增强
+      let n = Math.pow(neg, 1.5); // 稍微降低指数，防止 neg 吞掉所有颜色
+      let p = Math.pow(pos, 2.0);
+      let u = Math.pow(neu, 1.2);
+
+      const total = n + p + u;
+      globalMood.neg = n / total;
+      globalMood.pos = p / total;
+      globalMood.neu = u / total;
 
       // 6. 执行文字高亮 (可以保持原有逻辑，或增加中性词检测)
       highlightText(text, neg, pos);
+
+      updateVibe(result);
     };
 
     // 监听输入，使用防抖避免过于频繁触发
     inputContainer.addEventListener("input", debounce(performInference, 500));
 
     // 初始执行一次
-    performInference();
+    // performInference();
   } catch (e) {
     status.innerText = "系统崩溃: " + e;
     status.style.color = "var(--neon-red)";
