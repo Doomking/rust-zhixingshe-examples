@@ -1,8 +1,8 @@
 **/out
 **/target
 **/.DS_Store
-wasm/**/converted_model
-wasm/**/model
+wasm/**/converted_model/
+wasm/**/model/
 # Python-generated files
 **/__pycache__/
 **/*.py[oc]
