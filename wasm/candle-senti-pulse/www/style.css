@@ -25,8 +25,8 @@ body {
 
 .container {
     max-width: 800px;
-    margin: 40px auto;
-    padding: 30px;
+    margin: 20px auto;
+    /*padding: 30px;*/
     background: rgba(255, 255, 255, 0.02);
     backdrop-filter: blur(10px); /* 毛玻璃效果 */
     border-radius: 24px;
@@ -47,10 +47,12 @@ body {
     opacity: 0.7;
     margin-top: 10px;
 }
-
+#status-text {
+    text-align: center;
+}
 /* 2. 新的输入框容器样式 */
 .input-wrapper {
-    margin: 30px 0;
+    margin: 20px;
     background: rgba(0, 0, 0, 0.3);
     border-radius: 16px;
     padding: 5px;
@@ -61,8 +63,8 @@ body {
 }
 
 #user-input-container {
-    min-height: 120px;
-    padding: 20px;
+    min-height: 80px;
+    padding: 10px;
     font-size: 1.2rem;
     line-height: 1.6;
     color: #eee; /* 提高亮度 */
@@ -236,4 +238,57 @@ body {
     transition:
         box-shadow 0.5s,
         border-color 0.5s;
+}
+
+/* 测试用例容器样式 */
+.test-cases-container {
+    margin-top: 20px;
+    padding-top: 15px;
+    margin-bottom: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.section-label {
+    font-size: 20px;
+    color: #666;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-left: 20px;
+}
+
+.test-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+}
+
+.test-tag {
+    font-size: 0.85rem;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: #aaa;
+}
+
+.test-tag:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--neon-blue);
+    color: #fff;
+    transform: translateY(-2px);
+}
+
+/* 根据情绪预设给标签一点微妙的边框色 */
+.tag-pos {
+    border-left: 3px solid var(--neon-blue);
+}
+.tag-neg {
+    border-left: 3px solid var(--neon-red);
+}
+.tag-neu {
+    border-left: 3px solid #a855f7;
 }

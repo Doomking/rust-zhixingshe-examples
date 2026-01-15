@@ -226,7 +226,7 @@ async function startApp() {
     // const baseUrl = "./model/jackietung/bert-base-chinese-finetuned-sentiment/";
     const baseUrl = "./model/uer/roberta-base-finetuned-jd-binary-chinese/";
 
-    status.innerText = "正在接收卫星数据 (下载模型权重)...";
+    status.innerText = "正在加载模型...";
     // 注意：文件名可能需要根据仓库实际情况调整
     const [weights, tokenizer, config] = await Promise.all([
       fetch(baseUrl + "model.safetensors").then((r) => r.arrayBuffer()),
@@ -259,6 +259,33 @@ async function startApp() {
     // UI 切换
     document.getElementById("loading-screen").classList.add("hidden");
     document.getElementById("main-content").classList.remove("hidden");
+
+    const tagsContainer = document.getElementById("test-tags");
+
+    TEST_CASES.forEach((item) => {
+      const span = document.createElement("span");
+      span.className = `test-tag tag-${item.type}`;
+      span.innerText = item.text;
+
+      span.onclick = () => {
+        // 1. 填入文字
+        inputContainer.innerText = item.text;
+
+        // 2. 这里的 lastText 需要重置，否则 highlightText 可能会因为相等而跳过
+        lastText = "";
+
+        // 3. 立即触发一次推理逻辑
+        performInference();
+
+        // 4. 视觉反馈：点击后输入框闪烁一下
+        inputContainer.style.animation = "none";
+        setTimeout(() => {
+          inputContainer.style.animation = "pulse-blue 0.4s ease";
+        }, 10);
+      };
+
+      tagsContainer.appendChild(span);
+    });
 
     // 定义推理主逻辑
     const performInference = () => {
@@ -297,7 +324,7 @@ async function startApp() {
       // 中性值直接用 100 减去其他两项，确保总和永远是 100
       const u_pct = 100 - n_pct - p_pct;
 
-      stats.innerText = `Inference Time: ${(t1 - t0).toFixed(1)}ms | Neg: ${n_pct}% Neu: ${u_pct}% Pos: ${p_pct}%`;
+      stats.innerText = `推理时间: ${(t1 - t0).toFixed(1)}ms | 负面: ${n_pct}% 中性: ${u_pct}% 正面: ${p_pct}%`;
       // 5. 驱动粒子风暴
       // 中性时速度最平稳 (targetSpeed 较低)
       // globalMood.targetSpeed = 0.5 + neg * 2.5 + pos * 0.5;
@@ -341,5 +368,16 @@ async function startApp() {
     console.error(e);
   }
 }
+
+const TEST_CASES = [
+  { text: "太棒了，简直是意外之喜！", type: "pos" },
+  { text: "彻底失望，这种质量居然也敢拿出来卖？", type: "neg" },
+  { text: "虽然等了很久，但东西确实惊艳到我了。", type: "pos" },
+  { text: "今天星期四，明天发工资。", type: "neu" },
+  { text: "真行啊，你们的服务态度真是让我大开眼界。", type: "neg" },
+  { text: "还可以吧，感觉对得起这个价格。", type: "pos" },
+  { text: "感觉一般，没有想象中那么好。", type: "neg" },
+  { text: "这是一张长方形的桌子，上面放着三本书。", type: "neu" },
+];
 
 startApp();

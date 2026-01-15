@@ -3,18 +3,18 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Wasm AI 情绪中枢</title>
+        <title>Rust Wasm AI 情绪中枢</title>
         <link rel="stylesheet" href="style.css" />
     </head>
     <body>
         <canvas id="particle-canvas"></canvas>
 
         <div class="container">
-            <h1 class="neon-title">AI 情绪中枢 <small>Candle + Wasm</small></h1>
+            <h2 class="neon-title">AI 情绪中枢 <small>Rust + Candle + Wasm</small></h1>
 
             <div id="loading-screen">
                 <div class="loader"></div>
-                <p id="status-text">正在初始化神经元网络...</p>
+                <p id="status-text">正在初始化...</p>
             </div>
 
             <div id="main-content" class="hidden">
@@ -31,7 +31,7 @@
                         <div class="thermometer">
                             <div id="neg-mercury" class="mercury neg"></div>
                         </div>
-                        <label class="neon-red">NEGATIVE</label>
+                        <label class="neon-red">负面</label>
                     </div>
                     <div class="thermometer-group">
                         <div class="thermometer">
@@ -42,20 +42,23 @@
                                 color: #a855f7;
                                 text-shadow: 0 0 10px #a855f7;
                             "
-                            >NEUTRAL</label
+                            >中性</label
                         >
                     </div>
                     <div class="thermometer-group">
                         <div class="thermometer">
                             <div id="pos-mercury" class="mercury pos"></div>
                         </div>
-                        <label class="neon-blue">POSITIVE</label>
+                        <label class="neon-blue">正面</label>
                     </div>
                 </div>
 
                 <div id="heatmap-strip" class="heatmap-strip"></div>
-
-                <p id="stats-text">Ready.</p>
+                <p id="stats-text">已就绪</p>
+                <div class="test-cases-container">
+                    <p class="section-label">情绪压力测试集</p>
+                    <div id="test-tags" class="test-tags"></div>
+                </div>
             </div>
         </div>
         <script type="module" src="main.js"></script>
