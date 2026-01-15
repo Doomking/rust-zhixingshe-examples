@@ -92,10 +92,6 @@ animateParticles();
 // =========================================
 
 // 模拟的关键词词典 (用于演示文字发光效果)
-// const SIMULATED_ATTENTION = {
-//     pos: ['good', 'great', 'excellent', 'amazing', 'love', 'fantastic', 'stunning', 'best', 'superb'],
-//     neg: ['bad', 'worst', 'terrible', 'awful', 'hate', 'weak', 'poor', 'disaster', 'boring']
-// };
 // 模拟中文关键词词典
 const SIMULATED_ATTENTION = {
   pos: ["好", "棒", "给力", "推荐", "喜欢", "极致", "完美", "快", "优秀", "强"],
@@ -222,8 +218,7 @@ async function startApp() {
   const stats = document.getElementById("stats-text");
 
   try {
-    // 修改为中文模型资源
-    // const baseUrl = "./model/jackietung/bert-base-chinese-finetuned-sentiment/";
+    // 中文模型资源
     const baseUrl = "./model/uer/roberta-base-finetuned-jd-binary-chinese/";
 
     status.innerText = "正在加载模型...";
@@ -233,23 +228,9 @@ async function startApp() {
       fetch(baseUrl + "tokenizer.json").then((r) => r.arrayBuffer()),
       fetch(baseUrl + "config.json").then((r) => r.text()),
     ]);
-    // 使用量化版模型 (Q4_K_M) 以加快加载速度，约 70MB
-    // 注意：需要确保你的 miniserve 正确设置了 MIME type 或跨域头
-    // const weightsUrl = "https://huggingface.co/lmz/candle-quantized-bert/resolve/main/distilbert-sst2-q4k.gguf";
-    // const tokenizerUrl = "https://huggingface.co/distilbert-base-uncased-finetuned-sst-2-english/resolve/main/tokenizer.json";
-    // const configUrl = "https://huggingface.co/distilbert-base-uncased-finetuned-sst-2-english/resolve/main/config.json";
-
-    // 并发加载
-    // const [weights, tokenizer, config] = await Promise.all([
-    //     fetch(weightsUrl).then(r => r.arrayBuffer()),
-    //     fetch(tokenizerUrl).then(r => r.arrayBuffer()),
-    //     fetch(configUrl).then(r => r.text())
-    // ]);
 
     status.innerText = "正在激活 Wasm 神经核...";
-    // 注意：这里假设 Rust 端已经更新为支持 GGUF 量化加载的 new 方法
-    // 如果你还在用之前的 Safetensors 版本，请回退到旧的加载 URLs 和 Rust 代码
-    // 为了演示效果，我们假设 Rust 侧已经适配好了。
+
     const engine = new SentiPulseEngine(
       new Uint8Array(weights),
       new Uint8Array(tokenizer),
@@ -296,14 +277,14 @@ async function startApp() {
       }
 
       const t0 = performance.now();
-      // 1. 调用 Rust Wasm (假设返回对象包含 neg, pos, neu)
+      // 1. 调用 Rust Wasm (返回对象包含 neg, pos, neu)
       const result = engine.predict(text);
       const { negative: neg, positive: pos, neutral: neu } = result;
       const t1 = performance.now();
 
       // --- 更新可视化 ---
 
-      // 2. 更新温度计 (如果 HTML 有三个温度计，此处增加一个)
+      // 2. 更新温度计 (如果 HTML 有三个温度计)
       document.getElementById("neg-mercury").style.height = `${5 + neg * 95}%`;
       document.getElementById("pos-mercury").style.height = `${5 + pos * 95}%`;
       // 如果你在 HTML 增加了 neu-mercury 元素：
@@ -323,15 +304,17 @@ async function startApp() {
       const p_pct = Math.round((pos / (neg + pos + neu)) * 100);
       // 中性值直接用 100 减去其他两项，确保总和永远是 100
       const u_pct = 100 - n_pct - p_pct;
+      // 2. 更新温度计数值
+      document.getElementById("neg-thermometer-score").innerHTML = `${n_pct}%`;
+      document.getElementById("pos-thermometer-score").innerHTML = `${p_pct}%`;
+      if (document.getElementById("neu-thermometer-score")) {
+        document.getElementById("neu-thermometer-score").innerHTML =
+          `${u_pct}%`;
+      }
 
       stats.innerText = `推理时间: ${(t1 - t0).toFixed(1)}ms | 负面: ${n_pct}% 中性: ${u_pct}% 正面: ${p_pct}%`;
       // 5. 驱动粒子风暴
-      // 中性时速度最平稳 (targetSpeed 较低)
-      // globalMood.targetSpeed = 0.5 + neg * 2.5 + pos * 0.5;
-      // globalMood.chaos = 0.1 + neg * 0.5;
 
-      // 计算综合情绪分 (-1 到 1)
-      // 在 performInference 函数中修改
       const sentimentScore = pos * 1 + neu * 0 + neg * -1;
 
       // 限制最高速度倍率，防止粒子飞得太快

@@ -60,7 +60,7 @@ impl SentiPulseEngine {
         let model = BertModel::load(vb.pp("bert"), &config)?;
 
         // 2. 尝试加载 Pooler 层 (通常在 bert.pooler 下)
-        // 这一层非常关键，它把原始特征压缩到 -1~1 之间
+        // 把原始特征压缩到 -1~1 之间
         let w_pooler = vb
             .pp("bert")
             .get(
@@ -129,7 +129,7 @@ impl SentiPulseEngine {
         // 取出 [CLS] (原始向量)
         let mut cls_token = enc.get(0)?.get(0)?.unsqueeze(0)?;
 
-        // --- 核心修复：执行 Pooler (如果存在) ---
+        // --- 执行 Pooler (如果存在) ---
         if let (Some(w), Some(b)) = (&self.w_pooler, &self.b_pooler) {
             // Pooler 逻辑: Tanh( Linear(CLS) )
             cls_token = cls_token.matmul(&w.t()?)?.broadcast_add(b)?.tanh()?;
@@ -142,14 +142,10 @@ impl SentiPulseEngine {
             .broadcast_add(&self.b_out)?;
 
         // -----------------------------------------------------------
-        // 🔧 修复核心：添加温度缩放 (Temperature Scaling)
-        // 原始 logits 数值太小，导致 softmax 后的概率拉不开差距。
-        // 我们手动乘以一个系数 (比如 5.0)，相当于降低 temperature，让结果更自信。
-        // -----------------------------------------------------------
         let scale_factor = 1.0;
         let scaled_logits = (logits * scale_factor as f64)?;
 
-        // 使用放大后的 logits 进行 Softmax
+        // 进行 Softmax
         let pr = candle_nn::ops::softmax(&scaled_logits.flatten_all()?, 0)?;
         let scores = pr.to_vec1::<f32>()?;
 
@@ -181,18 +177,13 @@ impl SentiPulseEngine {
                 (0.33, 0.33, 0.34) // 兜底：防止除以零
             }
         };
-        // 你会发现它们可能长这样：[0.1, 0.2, 0.5] -> 放大后 -> [0.5, 1.0, 2.5]
+        // 它们可能长这样：[0.1, 0.2, 0.5] -> 放大后 -> [0.5, 1.0, 2.5]
         web_sys::console::log_1(&format!("Raw Text: {}, Raw Scores: {:?}", text, scores).into());
         let result = SentiPulseResult {
             negative: neg,
-            positive: pos, // 修正映射：实验证明开心时 index 1 最高
+            positive: pos,
             neutral: neu,
         };
-        // let result = SentiPulseResult {
-        //     negative: scores[0],
-        //     positive: scores[1], // 修正映射：实验证明开心时 index 1 最高
-        //     neutral: scores[2],
-        // };
         web_sys::console::log_1(&format!("Raw Text: {}, result: {:?}", text, result).into());
 
         Ok(result)

@@ -6,7 +6,7 @@ import os
 
 # 这个模型专门针对中文“好/坏”二分类微调，非常准
 # 虽然是二分类，但对于情绪检测来说比模糊的三分类更稳
-MODEL_NAME = "uer/roberta-base-finetuned-jd-binary-chinese" 
+MODEL_NAME = "uer/roberta-base-finetuned-jd-binary-chinese"
 SAVE_DIR = "./converted_model"
 
 # 强制使用镜像
@@ -17,12 +17,12 @@ def convert():
         os.makedirs(SAVE_DIR)
 
     print(f"🚀 正在下载模型: {MODEL_NAME}...")
-    
+
     try:
         # 加载
         model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, trust_remote_code=True)
         tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-        
+
         # 1. 导出 config
         print("📦 正在生成 config.json...")
         config = model.config.to_dict()
@@ -36,10 +36,10 @@ def convert():
         # 3. 导出权重
         print("💾 正在生成 model.safetensors...")
         state_dict = model.state_dict()
-        
+
         # 移除可能存在的 _orig_mod 等前缀（如果使用了 torch.compile）
         clean_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-        
+
         save_file(clean_state_dict, os.path.join(SAVE_DIR, "model.safetensors"))
 
         print("\n" + "✨"*15)
@@ -54,7 +54,7 @@ def convert():
         print(f"\n❌ 还是下载失败: {e}")
         print("\n💡 终极备选方案：")
         print("请直接在浏览器访问 https://hf-mirror.com/uer/roberta-base-finetuned-jd-binary-chinese")
-        print("手动下载 pytorch_model.bin, config.json, vocab.txt 三个文件到本地文件夹，然后联系我帮你写本地转换代码。")
+        print("手动下载 pytorch_model.bin, config.json, vocab.txt 三个文件到本地文件夹")
 
 if __name__ == "__main__":
     convert()
