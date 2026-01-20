@@ -1,0 +1,355 @@
+/* ================= 全局设置 ================= */
+:root {
+  --bg-color: #050508;
+  --glass-bg: rgba(20, 20, 30, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --accent-color: #00f2ff;
+  /* 赛博青 */
+  --accent-glow: rgba(0, 242, 255, 0.4);
+  --user-msg-bg: #005f6b;
+  --ai-msg-bg: rgba(255, 255, 255, 0.08);
+  --text-primary: #ffffff;
+  --text-secondary: #8b9bb4;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Inter", sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  overflow: hidden;
+  /* 防止出现滚动条 */
+  height: 100vh;
+  width: 100vw;
+}
+
+/* ================= 3D 画布 ================= */
+#canvas-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  /* 最底层 */
+}
+
+/* ================= 加载屏幕 ================= */
+#loading-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 999;
+  background: #000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: opacity 0.5s ease;
+}
+
+.loader-content {
+  text-align: center;
+  width: 300px;
+}
+
+.spinner {
+  width: 50px;
+  height: 50px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top: 3px solid var(--accent-color);
+  border-radius: 50%;
+  margin: 0 auto 20px;
+  animation: spin 1s linear infinite;
+  box-shadow: 0 0 15px var(--accent-glow);
+}
+
+#loading-text {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 1.2rem;
+  letter-spacing: 2px;
+  margin-bottom: 15px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  /* JS 控制这个宽度 */
+  background: var(--accent-color);
+  transition: width 0.3s ease;
+  box-shadow: 0 0 10px var(--accent-color);
+}
+
+.sub-text {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-top: 10px;
+}
+
+/* ================= UI 层 (聊天窗口) ================= */
+#ui-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  pointer-events: none;
+  /* 让鼠标点击穿透非 UI 区域，以便旋转 3D 模型 */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  /* 手机端靠下，PC端靠右 */
+  padding: 20px;
+  transition: opacity 0.5s ease;
+}
+
+#ui-layer.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* PC 端布局：聊天框在右侧 */
+@media (min-width: 768px) {
+  #ui-layer {
+    align-items: flex-end;
+    /* 靠右对齐 */
+    justify-content: center;
+    padding-right: 50px;
+  }
+}
+
+/* 状态栏 */
+.status-bar {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  backdrop-filter: blur(5px);
+  border: 1px solid var(--glass-border);
+}
+
+.indicator {
+  width: 8px;
+  height: 8px;
+  background: #4caf50;
+  border-radius: 50%;
+  margin-right: 10px;
+  box-shadow: 0 0 5px #4caf50;
+}
+
+.divider {
+  margin: 0 10px;
+  color: var(--glass-border);
+}
+
+/* 聊天容器主卡片 */
+.chat-container {
+  width: 100%;
+  max-width: 380px;
+  height: 90vh;
+  /* 占据屏幕高度的 90% */
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  /* 恢复点击 */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  animation: slideUp 0.5s ease-out;
+}
+
+.chat-header {
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.avatar-icon {
+  font-size: 1.5rem;
+  margin-right: 12px;
+}
+
+.header-info h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.status-tag {
+  font-size: 0.7rem;
+  color: var(--accent-color);
+  border: 1px solid var(--accent-color);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+/* 消息列表 */
+.chat-history {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+/* 滚动条样式 */
+.chat-history::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-history::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+/* 气泡样式 */
+.message {
+  display: flex;
+  flex-direction: column;
+  max-width: 85%;
+  animation: fadeIn 0.3s ease;
+}
+
+.message-content {
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+/* AI 消息 */
+.ai-message {
+  align-self: flex-start;
+}
+
+.ai-message .message-content {
+  background: var(--ai-msg-bg);
+  border-top-left-radius: 2px;
+  border: 1px solid var(--glass-border);
+}
+
+/* 用户消息 */
+.user-message {
+  align-self: flex-end;
+}
+
+.user-message .message-content {
+  background: var(--user-msg-bg);
+  color: white;
+  border-top-right-radius: 2px;
+  box-shadow: 0 4px 15px rgba(0, 242, 255, 0.1);
+}
+
+/* 输入区域 */
+.input-area {
+  padding: 15px;
+  border-top: 1px solid var(--glass-border);
+  display: flex;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+#userInput {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 10px 15px;
+  color: white;
+  font-family: inherit;
+  outline: none;
+  transition: border 0.3s;
+}
+
+#userInput:focus {
+  border-color: var(--accent-color);
+}
+
+#sendBtn {
+  background: var(--accent-color);
+  border: none;
+  border-radius: 8px;
+  width: 44px;
+  height: 44px;
+  color: #000;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+
+#sendBtn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 10px var(--accent-color);
+}
+
+#sendBtn svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* 动画 */
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
