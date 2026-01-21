@@ -1,15 +1,15 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Digital Human | WebGPU Engine</title>
-    <link rel="stylesheet" href="./style.css" />
-    <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap"
-      rel="stylesheet"
-    />
-    <script type="importmap">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Digital Human | WebGPU Engine</title>
+  <link rel="stylesheet" href="./style.css" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap"
+    rel="stylesheet" />
+  <script type="importmap">
       {
         "imports": {
           "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
@@ -18,69 +18,61 @@
         }
       }
     </script>
-  </head>
-  <body>
-    <div id="canvas-container"></div>
+</head>
 
-    <div id="loading-screen">
-      <div class="loader-content">
-        <div class="spinner"></div>
-        <h2 id="loading-text">INITIALIZING WEBGPU...</h2>
-        <div class="progress-bar">
-          <div class="progress-fill" id="progress-fill"></div>
-        </div>
-        <p class="sub-text">Loading Quantized LLM & 3D Assets</p>
+<body>
+  <div id="canvas-container"></div>
+
+  <div id="loading-screen">
+    <div class="loader-content">
+      <div class="spinner"></div>
+      <h2 id="loading-text">INITIALIZING WEBGPU...</h2>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill"></div>
       </div>
+      <p class="sub-text">Loading Quantized LLM & 3D Assets</p>
+    </div>
+  </div>
+
+  <div id="ui-layer" class="hidden">
+    <div class="status-bar">
+      <div class="indicator active"></div>
+      <span id="fps-counter">60 FPS</span>
+      <span class="divider">|</span>
+      <span id="model-status">MODEL READY</span>
     </div>
 
-    <div id="ui-layer" class="hidden">
-      <div class="status-bar">
-        <div class="indicator active"></div>
-        <span id="fps-counter">60 FPS</span>
-        <span class="divider">|</span>
-        <span id="model-status">MODEL READY</span>
+    <div class="chat-container">
+      <div class="chat-header">
+        <span class="avatar-icon">🤖</span>
+        <div class="header-info">
+          <h3>Qwen-0.5B</h3>
+          <span class="status-tag">WebGPU Accelerated</span>
+        </div>
       </div>
 
-      <div class="chat-container">
-        <div class="chat-header">
-          <span class="avatar-icon">🤖</span>
-          <div class="header-info">
-            <h3>Qwen-0.5B-Chat</h3>
-            <span class="status-tag">WebGPU Accelerated</span>
+      <div id="chat-history" class="chat-history">
+        <div class="message ai-message">
+          <div class="message-content">
+            你好！我是运行在你浏览器里的 3D
+            智能助手。没有任何数据会上传到服务器，我们可以聊聊吗？
           </div>
         </div>
+      </div>
 
-        <div id="chat-history" class="chat-history">
-          <div class="message ai-message">
-            <div class="message-content">
-              你好！我是运行在你浏览器里的 3D
-              智能助手。没有任何数据会上传到服务器，我们可以聊聊吗？
-            </div>
-          </div>
-        </div>
-
-        <div class="input-area">
-          <input
-            type="text"
-            id="userInput"
-            placeholder="输入消息... (Enter 发送)"
-            autocomplete="off"
-          />
-          <button id="sendBtn">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <line x1="22" y1="2" x2="11" y2="13"></line>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-            </svg>
-          </button>
-        </div>
+      <div class="input-area">
+        <input type="text" id="userInput" placeholder="输入消息... (Enter 发送)" autocomplete="off" />
+        <button id="sendBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
       </div>
     </div>
+  </div>
 
-    <script type="module" src="./index.js"></script>
-  </body>
+  <script type="module" src="./index.js"></script>
+</body>
+
 </html>
