@@ -196,6 +196,13 @@ body {
   margin-right: 12px;
 }
 
+.avatar-icon img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: block;
+}
+
 .header-info h3 {
   font-size: 1rem;
   font-weight: 600;
