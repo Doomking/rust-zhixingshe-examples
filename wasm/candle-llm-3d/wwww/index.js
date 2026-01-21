@@ -74,8 +74,9 @@ async function start() {
     1000,
   );
   // 视角终合调优：改为正对前方 (Frontal View)
-  // Camera X=0.2, Target X=0.2 -> 视线平行，数字人(X=0) 位于屏幕左侧
-  camera.position.set(0.2, 1.0, 0.65);
+  // 视角终合调优：改为正对前方 (Frontal View)
+  // Camera X=0, Target X=0 -> 视线平行
+  camera.position.set(0, 1.0, 0.65);
 
   // 2. 增强光照
   const directionalLight = new THREE.DirectionalLight(0xffffff, 2.0);
@@ -92,17 +93,33 @@ async function start() {
   // 3. 添加轨道控制器 (OrbitControls)
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
-  controls.enableDamping = true;
-  controls.target.set(0.2, 0.85, 0); // COI 设为 0.2，让位于 0.0 的数字人显在左边
+  controls.target.set(0, 0.85, 0); // 必须以人为中心
   controls.enablePan = false;
   controls.minDistance = 0.3;
   controls.maxDistance = 3.0;
 
+  // **关键**：使用 ViewOffset 实现“居中旋转，左侧构图”
+  // 原理：不移动摄像机，而是移动底片的成像区域
+  function updateCameraOffset() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    // 我们希望主体出现在左侧，说明View要往右偏
+    // Offset X > 0 => 视口向右移 => 物体向左移
+    const offsetX = w * 0.25; // 偏移 25% 宽度
+    camera.view = null; // 重置
+    camera.setViewOffset(w, h, offsetX, 0, w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+
+    renderer.setSize(w, h);
+  }
+
+  updateCameraOffset();
+
   // 响应式调整
   window.addEventListener("resize", () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    updateCameraOffset();
   });
 
   // 强化光照
