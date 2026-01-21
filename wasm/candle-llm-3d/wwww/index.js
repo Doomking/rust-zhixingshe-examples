@@ -1,11 +1,11 @@
-import init, { LLMEngine } from "../pkg/candle_llm_3d.js";
+// import init, { LLMEngine } from "../pkg/candle_llm_3d.js"; // Moved to worker
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { DigitalHuman } from "./digital_human.js";
 import { TextToSpeech } from "./tts.js";
 
 async function start() {
-  await init();
+  // await init();
 
   // 1. 初始化场景
   const scene = new THREE.Scene();
@@ -133,20 +133,70 @@ async function start() {
   }
   animate();
 
-  // 3. 加载模型逻辑 (保持 fetchBytes 逻辑不变)
+  // 3. 初始化 Worker
+  const worker = new Worker("./worker.js", { type: "module" });
+
+  // 状态追踪
+  let currentAiContent = null;
+  let currentFullResponse = "";
+
+  worker.onmessage = (e) => {
+    const { action, token, error } = e.data;
+
+    switch (action) {
+      case "loaded":
+        console.log("Worker loaded model successfully");
+        document.getElementById("loading-screen").style.display = "none";
+        document.getElementById("ui-layer").classList.remove("hidden");
+        break;
+      case "token":
+        if (currentAiContent) {
+          currentFullResponse += token;
+          currentAiContent.innerText = currentFullResponse;
+          tts.append(token);
+          document.getElementById("chat-history").scrollTop = document.getElementById("chat-history").scrollHeight;
+        }
+        break;
+      case "done":
+        console.log("Worker finished generation");
+        tts.flush();
+        avatar.setSpeaking(false); // 确保停止
+        break;
+      case "error":
+        console.error("Worker error:", error);
+        if (currentAiContent) {
+          currentAiContent.innerText += "\n[Error: " + error + "]";
+        }
+        avatar.setSpeaking(false);
+        break;
+    }
+  };
+
+  // 4. 加载模型逻辑 (保持 fetchBytes 逻辑不变)
   const modelPath = "./assets/model/Qwen2.5-0.5B-Instruct/";
   // const modelPath = "./assets/model/Qwen1.5-0.5B-Chat/";
-  const [weights, tokenizer, config] = await Promise.all([
+
+  // 并行下载权重
+  Promise.all([
     fetchBytes(`${modelPath}model.safetensors`),
     fetchBytes(`${modelPath}tokenizer.json`),
     fetchBytes(`${modelPath}config.json`),
-  ]);
+  ]).then(([weights, tokenizer, config]) => {
+    console.log("Assets downloaded, initializing worker...");
+    // 发送给 Worker 初始化 (转移所有权以提高性能)
+    worker.postMessage({
+      action: "init",
+      payload: { weights, tokenizer, config }
+    }, [weights.buffer, tokenizer.buffer, config.buffer]);
+  }).catch(e => {
+    console.error("Failed to download assets:", e);
+    appendMessage("ai", "加载失败: " + e.message);
+  });
 
-  const engine = await LLMEngine.init(weights, tokenizer, config);
-
-  // UI 切换逻辑...
-  document.getElementById("loading-screen").style.display = "none";
-  document.getElementById("ui-layer").classList.remove("hidden");
+  // (原 LLMEngine.init 逻辑已移至 Worker)
+  // const engine = await LLMEngine.init(weights, tokenizer, config);
+  // document.getElementById("loading-screen").style.display = "none";
+  // document.getElementById("ui-layer").classList.remove("hidden");
 
   // 4. UI 辅助函数
   function appendMessage(role, text) {
@@ -186,46 +236,21 @@ async function start() {
     const prompt = `<|im_start|>user\n${text}<|im_end|>\n<|im_start|>assistant\n`;
 
     try {
-      console.log("Starting streaming inference...");
+      console.log("Sending prompt to worker...");
 
-      // 3. 初始化并准备推理
-      engine.apply_prompt(prompt);
+      // 3. 创建 UI
+      currentAiContent = appendMessage("ai", "");
+      currentFullResponse = "";
 
-      // 4. 创建一个空的 AI 回复框
-      const aiContent = appendMessage("ai", "");
-      let fullResponse = "";
-
-      // 停止上一次可能的语音
+      // 4. 停止上一次可能的语音
       tts.stop();
 
-      // 开始说话动画
+      // 5. 开始说话动画 (Worker 回传 done 时停止)
       avatar.setSpeaking(true);
 
-      // 5. 流式推理循环：动态追踪 AI 是否说完
-      while (!engine.is_finished()) {
-        const piece = engine.step();
+      // 6. 发送给 Worker
+      worker.postMessage({ action: "generate", payload: { prompt } });
 
-        if (piece) {
-          fullResponse += piece;
-          aiContent.innerText = fullResponse;
-
-          tts.append(piece); // 喂给 TTS 进行断句和播放
-
-          // 自动滚动
-          document.getElementById("chat-history").scrollTop =
-            document.getElementById("chat-history").scrollHeight;
-        }
-
-        // **关键**：微调延迟 (30ms)，配合极速 TTS
-        await new Promise((r) => setTimeout(r, 30));
-
-        // 可选：添加一个极大的安全上限防止死循环（例如 1000 tokens）
-        if (fullResponse.length > 2000) break;
-      }
-
-      // 确保最后剩余文本被播放
-      tts.flush();
-      console.log("Stream finished.");
     } catch (e) {
       console.error("Inference Error:", e);
       appendMessage("ai", "抱歉，出错了: " + e.message);
