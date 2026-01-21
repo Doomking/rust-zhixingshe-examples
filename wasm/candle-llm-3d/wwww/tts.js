@@ -7,7 +7,7 @@ export class TextToSpeech {
         this.onEnd = onEnd;
         this.buffer = "";
 
-        // 尝试获取中文语音
+        // 获取中文语音
         this.voice = null;
         this.initVoice();
 
@@ -20,8 +20,8 @@ export class TextToSpeech {
 
     initVoice() {
         const voices = this.synth.getVoices();
-        // 优先选择中文女声 (Google, Microsoft, or System default)
-        this.voice = voices.find(v => v.lang.includes("zh") && (v.name.includes("Female") || v.name.includes("Google"))) ||
+        console.log("[TTS] Available voices:", voices);
+        this.voice = voices.find(v => v.lang.includes("zh") && (v.name.includes("美嘉") || v.name.includes("Google"))) ||
             voices.find(v => v.lang.includes("zh")) ||
             voices[0];
         console.log("[TTS] Selected voice:", this.voice ? this.voice.name : "Default");

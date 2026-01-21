@@ -33,7 +33,6 @@ impl LLMEngine {
         let config: QwenConfig = serde_json::from_slice(&config_data)
             .map_err(|e| JsValue::from_str(&format!("Config JSON Error: {:?}", e)))?;
 
-        // 初始化 VarBuilder。WebGPU 环境下可以尝试 F16 以提升性能，但此处为了稳定性先保持 F32
         let vb = VarBuilder::from_buffered_safetensors(weights_data, DType::F32, &device)
             .map_err(|e| JsValue::from_str(&format!("Weights Error: {:?}", e)))?;
 
@@ -106,7 +105,7 @@ impl LLMEngine {
             .flatten_all()
             .map_err(|e| JsError::new(&e.to_string()))?;
 
-        // 核心优化：应用重复惩罚 (Repetition Penalty)
+        // 应用重复惩罚 (Repetition Penalty)
         // 惩罚系数建议在 1.1 左右，防止模型陷入死循环
         let penalty = 1.1f32;
         let mut logits_vec = logits
@@ -140,7 +139,6 @@ impl LLMEngine {
 
         self.token_ids.push(next_token_id);
 
-        // 核心修复：解决流式解码中断导致的  问题
         // 解码整个序列（包含 prompt），然后计算增量部分
         let all_text = self
             .tokenizer
@@ -178,7 +176,7 @@ impl LLMEngine {
     }
 
     pub fn reset(&mut self) {
-        // 核心：清除模型内部的 KV cache
+        // 清除模型内部的 KV cache
         self.model.clear_kv_cache();
         self.pos = 0;
         self.token_ids.clear();

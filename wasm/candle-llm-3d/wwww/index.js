@@ -1,4 +1,3 @@
-// import init, { LLMEngine } from "../pkg/candle_llm_3d.js"; // Moved to worker
 import * as THREE from "three";
 import WebGPURenderer from "three/examples/jsm/renderers/webgpu/WebGPURenderer.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -6,22 +5,17 @@ import { DigitalHuman } from "./digital_human.js";
 import { TextToSpeech } from "./tts.js";
 
 async function start() {
-  // await init();
-
-  // 1. 初始化场景
+  //  初始化场景
   const scene = new THREE.Scene();
 
-  // 3. 动态绘制背景 (Procedural Background)
-  // 不加载图片，而是用代码画一个二次元风格的网格空间
+  //  动态绘制背景 (Procedural Background)
   function createProceduralBackground() {
     const canvas = document.createElement("canvas");
     canvas.width = 1024;
     canvas.height = 1024;
     const ctx = canvas.getContext("2d");
 
-    // 2. 宫崎骏风格 (Ghibli Style) - 程序化绘制
-    // 特点：高饱和度的蓝天、洁白的云朵、绿意盎然的草地
-
+    // 高饱和度的蓝天、洁白的云朵、绿意盎然的草地
     // A. 蓝天 (Deep Blue Sky)
     const activeSky = ctx.createLinearGradient(0, 0, 0, 1024);
     activeSky.addColorStop(0, "#4A90E2"); // 天空蓝
@@ -74,9 +68,6 @@ async function start() {
     0.1,
     1000,
   );
-  // 视角终合调优：改为正对前方 (Frontal View)
-  // 视角终合调优：改为正对前方 (Frontal View)
-  // Camera X=0, Target X=0 -> 视线平行
   camera.position.set(0, 1.0, 0.65);
 
   // 2. 增强光照
@@ -108,14 +99,10 @@ async function start() {
   controls.minDistance = 0.3;
   controls.maxDistance = 3.0;
 
-  // **关键**：使用 ViewOffset 实现“居中旋转，左侧构图”
-  // 原理：不移动摄像机，而是移动底片的成像区域
   function updateCameraOffset() {
     const w = window.innerWidth;
     const h = window.innerHeight;
 
-    // 我们希望主体出现在左侧，说明View要往右偏
-    // Offset X > 0 => 视口向右移 => 物体向左移
     const offsetX = w * 0.25; // 偏移 25% 宽度
     camera.view = null; // 重置
     camera.setViewOffset(w, h, offsetX, 0, w, h);
@@ -149,7 +136,7 @@ async function start() {
   // 当 TTS 开始播放时，数字人开始张嘴；结束时闭嘴
   const tts = new TextToSpeech(
     () => avatar.setSpeaking(true),
-    () => avatar.setSpeaking(false)
+    () => avatar.setSpeaking(false),
   );
 
   function animate() {
@@ -181,7 +168,8 @@ async function start() {
           currentFullResponse += token;
           currentAiContent.innerText = currentFullResponse;
           tts.append(token);
-          document.getElementById("chat-history").scrollTop = document.getElementById("chat-history").scrollHeight;
+          document.getElementById("chat-history").scrollTop =
+            document.getElementById("chat-history").scrollHeight;
         }
         break;
       case "done":
@@ -208,22 +196,22 @@ async function start() {
     fetchBytes(`${modelPath}model.safetensors`),
     fetchBytes(`${modelPath}tokenizer.json`),
     fetchBytes(`${modelPath}config.json`),
-  ]).then(([weights, tokenizer, config]) => {
-    console.log("Assets downloaded, initializing worker...");
-    // 发送给 Worker 初始化 (转移所有权以提高性能)
-    worker.postMessage({
-      action: "init",
-      payload: { weights, tokenizer, config }
-    }, [weights.buffer, tokenizer.buffer, config.buffer]);
-  }).catch(e => {
-    console.error("Failed to download assets:", e);
-    appendMessage("ai", "加载失败: " + e.message);
-  });
-
-  // (原 LLMEngine.init 逻辑已移至 Worker)
-  // const engine = await LLMEngine.init(weights, tokenizer, config);
-  // document.getElementById("loading-screen").style.display = "none";
-  // document.getElementById("ui-layer").classList.remove("hidden");
+  ])
+    .then(([weights, tokenizer, config]) => {
+      console.log("Assets downloaded, initializing worker...");
+      // 发送给 Worker 初始化 (转移所有权以提高性能)
+      worker.postMessage(
+        {
+          action: "init",
+          payload: { weights, tokenizer, config },
+        },
+        [weights.buffer, tokenizer.buffer, config.buffer],
+      );
+    })
+    .catch((e) => {
+      console.error("Failed to download assets:", e);
+      appendMessage("ai", "加载失败: " + e.message);
+    });
 
   // 4. UI 辅助函数
   function appendMessage(role, text) {
@@ -277,7 +265,6 @@ async function start() {
 
       // 6. 发送给 Worker
       worker.postMessage({ action: "generate", payload: { prompt } });
-
     } catch (e) {
       console.error("Inference Error:", e);
       appendMessage("ai", "抱歉，出错了: " + e.message);

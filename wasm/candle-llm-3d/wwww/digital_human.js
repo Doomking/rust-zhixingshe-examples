@@ -1,4 +1,3 @@
-import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 // 针对 VRoid 标准表情基的映射
@@ -13,7 +12,7 @@ const VROID_MAP = {
   angry: "Fcl_ALL_Angry",
   blink: "Fcl_EYE_Close",
   joy: "Fcl_ALL_Joy",
-  browJoy: "Fcl_BRW_Joy"
+  browJoy: "Fcl_BRW_Joy",
 };
 
 export class DigitalHuman {
@@ -39,25 +38,40 @@ export class DigitalHuman {
         const lowName = child.name.toLowerCase();
         if (lowName.includes("neck")) this.bones.neck = child;
         if (lowName.includes("head")) this.bones.head = child;
-        if (lowName.includes("hips") || lowName.includes("pelvis")) this.bones.hips = child;
+        if (lowName.includes("hips") || lowName.includes("pelvis"))
+          this.bones.hips = child;
         if (lowName.includes("spine")) this.bones.spine = child;
 
         // 右臂骨骼捕获
-        if (lowName.includes("arm") && (lowName.includes("right") || lowName.includes("_r"))) {
+        if (
+          lowName.includes("arm") &&
+          (lowName.includes("right") || lowName.includes("_r"))
+        ) {
           if (lowName.includes("upper")) this.bones.upperArmR = child;
           if (lowName.includes("lower")) this.bones.lowerArmR = child;
         }
-        if (lowName.includes("hand") && (lowName.includes("right") || lowName.includes("_r"))) {
+        if (
+          lowName.includes("hand") &&
+          (lowName.includes("right") || lowName.includes("_r"))
+        ) {
           this.bones.handR = child;
         }
         // 右手手指 (排除末端)
-        if ((lowName.includes("right") || lowName.includes("_r")) &&
-          (lowName.includes("index") || lowName.includes("middle") || lowName.includes("ring") || lowName.includes("little"))) {
+        if (
+          (lowName.includes("right") || lowName.includes("_r")) &&
+          (lowName.includes("index") ||
+            lowName.includes("middle") ||
+            lowName.includes("ring") ||
+            lowName.includes("little"))
+        ) {
           if (!lowName.includes("end")) this.bones.fingersR.push(child);
         }
 
         // 左臂 (用于自然摆动)
-        if (lowName.includes("upperarm") && (lowName.includes("left") || lowName.includes("_l"))) {
+        if (
+          lowName.includes("upperarm") &&
+          (lowName.includes("left") || lowName.includes("_l"))
+        ) {
           this.bones.upperArmL = child;
         }
       }
@@ -70,7 +84,7 @@ export class DigitalHuman {
 
   setExpression(name, value) {
     const vroidName = VROID_MAP[name] || name;
-    this.morphMeshes.forEach(mesh => {
+    this.morphMeshes.forEach((mesh) => {
       const index = mesh.morphTargetDictionary[vroidName];
       if (index !== undefined) mesh.morphTargetInfluences[index] = value;
     });
@@ -81,7 +95,6 @@ export class DigitalHuman {
     const time = Date.now() * 0.001;
 
     // 1. 基础呼吸与身体微动
-    // 1. 基础呼吸与身体大晃动
     this.model.position.y = Math.sin(time * 1.0) * 0.01; // 增加位移
     this.model.rotation.z = Math.sin(time * 0.5) * 0.03; // 增加侧向晃动
 
@@ -99,7 +112,7 @@ export class DigitalHuman {
       this.bones.head.rotation.z = Math.sin(time * 0.4) * 0.2; // 增加歪头幅度
     }
 
-    // 2. 捂嘴笑动作逻辑 (抬手循环) - 缩短动作间隔
+    // 2. 捂嘴笑动作逻辑 (抬手循环)
     const cycle = (time * 1.8) % (Math.PI * 8);
     let liftProgress = 0;
 
@@ -114,15 +127,12 @@ export class DigitalHuman {
     // 3. 右手臂姿态驱动 (核心动作: 捂嘴笑)
     if (this.bones.upperArmR && this.bones.lowerArmR) {
       // --- 大臂 (UpperArm) ---
-      // 用户要求：小臂抬起，大臂不动 (肘部尽量放低)
-      // 休息位 (下垂): Z=1.3, X=0, Y=0
-      // 捂嘴位: Z=0.7 (肘部略高一点点以避开衣服), X=-0.6 (显著前伸), Y=1.5 (强内旋)
-      this.bones.upperArmR.rotation.z = 1.3 * (1 - liftProgress) + 0.7 * liftProgress;
+      this.bones.upperArmR.rotation.z =
+        1.3 * (1 - liftProgress) + 0.7 * liftProgress;
       this.bones.upperArmR.rotation.x = -0.6 * liftProgress;
       this.bones.upperArmR.rotation.y = 1.5 * liftProgress;
 
       // --- 前臂 (LowerArm) ---
-      // 继续加大抬起力度：达到极致折叠
       this.bones.lowerArmR.rotation.x = -4.1 * liftProgress;
       this.bones.lowerArmR.rotation.y = -2.2 * liftProgress; // 修正手掌指向面部
     }
@@ -135,7 +145,7 @@ export class DigitalHuman {
     }
 
     // 手指：保持优雅的微握或摊平
-    this.bones.fingersR.forEach(f => {
+    this.bones.fingersR.forEach((f) => {
       f.rotation.z = -0.3 * liftProgress;
     });
 
@@ -156,7 +166,7 @@ export class DigitalHuman {
       this.setExpression("mouthOpen", vA);
     } else {
       // 捂嘴时加大微笑弧度
-      const smileVal = 0.5 + (0.4 * liftProgress);
+      const smileVal = 0.5 + 0.4 * liftProgress;
       this.setExpression("Fcl_MTH_Joy", smileVal);
       this.setExpression("mouthOpen", 0);
     }
