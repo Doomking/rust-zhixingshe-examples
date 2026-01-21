@@ -34,13 +34,12 @@ export class TextToSpeech {
     }
 
     processBuffer() {
-        // 极致连贯模式：只在整句结束时才朗读
-        // 除非缓冲区堆积太满，否则绝不轻易切断
-        const MAX_BUFFER_SIZE = 80; // 缓冲区警告阈值
+        // 极致响应模式：更积极地断句以降低延迟
+        const MAX_BUFFER_SIZE = 10; // 缓冲区警告阈值：大幅降低
 
-        // 1. 优先检查强断句符号 (句号/感叹/问号) -> 这是最自然的停顿点
-        const strongPunctuation = /[。！？.!?;]/;
-        let match = strongPunctuation.exec(this.buffer);
+        // 包含逗号、顿号在内的所有停顿符号都直接触发播放
+        const punctuation = /[。！？，；.!?,;]/;
+        let match = punctuation.exec(this.buffer);
 
         if (match) {
             const sentence = this.buffer.substring(0, match.index + 1).trim();
@@ -49,15 +48,11 @@ export class TextToSpeech {
             return;
         }
 
-        // 2. 只有当积压太多文字时，才被迫在逗号处喘气 (防止延迟过高)
+        // 只有当无标点积压太多文字时，才强制切断
         if (this.buffer.length > MAX_BUFFER_SIZE) {
-            const weakPunctuation = /[,，、]/;
-            match = weakPunctuation.exec(this.buffer);
-            if (match) {
-                const sentence = this.buffer.substring(0, match.index + 1).trim();
-                this.buffer = this.buffer.substring(match.index + 1);
-                if (sentence) this.enqueue(sentence);
-            }
+            const sentence = this.buffer.trim();
+            this.enqueue(sentence);
+            this.buffer = "";
         }
     } // 强制刷新剩余缓冲区（生成结束时调用）
     flush() {
