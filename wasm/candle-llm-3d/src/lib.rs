@@ -24,6 +24,7 @@ impl LLMEngine {
     ) -> Result<LLMEngine, JsValue> {
         console_error_panic_hook::set_once();
 
+        // 由于后端兼容性，暂回退至 CPU 推理
         let device = Device::Cpu;
 
         let tokenizer = Tokenizer::from_bytes(&tokenizer_data)
@@ -32,7 +33,7 @@ impl LLMEngine {
         let config: QwenConfig = serde_json::from_slice(&config_data)
             .map_err(|e| JsValue::from_str(&format!("Config JSON Error: {:?}", e)))?;
 
-        // 核心修复：强制使用 F32。F16 在非 WebGPU 的 CPU 环境下极易产生计算溢出导致乱码
+        // 初始化 VarBuilder。WebGPU 环境下可以尝试 F16 以提升性能，但此处为了稳定性先保持 F32
         let vb = VarBuilder::from_buffered_safetensors(weights_data, DType::F32, &device)
             .map_err(|e| JsValue::from_str(&format!("Weights Error: {:?}", e)))?;
 

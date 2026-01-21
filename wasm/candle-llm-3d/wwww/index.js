@@ -1,5 +1,6 @@
 // import init, { LLMEngine } from "../pkg/candle_llm_3d.js"; // Moved to worker
 import * as THREE from "three";
+import WebGPURenderer from "three/examples/jsm/renderers/webgpu/WebGPURenderer.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { DigitalHuman } from "./digital_human.js";
 import { TextToSpeech } from "./tts.js";
@@ -83,7 +84,16 @@ async function start() {
   directionalLight.position.set(2, 4, 5);
   scene.add(directionalLight);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  // 4. 初始化渲染器 (优先尝试 WebGPU)
+  let renderer;
+  try {
+    renderer = new WebGPURenderer({ antialias: true, alpha: true });
+    console.log("[Renderer] Using WebGPU Engine");
+  } catch (e) {
+    console.warn("[Renderer] WebGPU not supported, falling back to WebGL:", e);
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  }
+
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.domElement.style.position = "absolute";

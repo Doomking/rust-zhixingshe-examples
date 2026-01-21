@@ -13,9 +13,12 @@ default = ["console_error_panic_hook"]
 [dependencies]
 console_error_panic_hook = { version = "0.1.7", optional = true }
 # 核心依赖：使用 git 源码，并开启 'ug' 特性, 即Unstable GPU
-candle-core = { git = "https://github.com/huggingface/candle.git", features = ["ug"] }
+candle-core = { git = "https://github.com/huggingface/candle.git", features = [
+    "ug",
+] }
 candle-nn = { git = "https://github.com/huggingface/candle.git" }
 candle-transformers = { git = "https://github.com/huggingface/candle.git" }
+wgpu = "0.19"
 getrandom = { version = "0.2.17", features = ["js"] }
 # web-sys 保持现状，确保 GPU 特性开启
 web-sys = { version = "0.3", features = [
@@ -26,9 +29,11 @@ web-sys = { version = "0.3", features = [
     "GpuDevice",
     "GpuCanvasContext",
     "GpuTextureFormat",
-    "GpuBuffer"
+    "GpuBuffer",
 ] }
-tokenizers = { version = "0.15", default-features = false, features = ["unstable_wasm"] }
+tokenizers = { version = "0.15", default-features = false, features = [
+    "unstable_wasm",
+] }
 wasm-bindgen = "0.2.84"
 wasm-bindgen-futures = "0.4"
 serde = { version = "1.0", features = ["derive"] }
