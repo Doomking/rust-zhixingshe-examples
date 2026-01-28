@@ -1,0 +1,40 @@
+[package]
+name = "blade-weaver-ai"
+version = "0.1.0"
+authors = ["doomking <xghan.cn@gmail.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+wasm-bindgen = "0.2.84"
+wasm-bindgen-futures = "0.4"
+# The `console_error_panic_hook` crate provides better debugging of panics by
+# logging them with `console.error`. This is great for development, but requires
+# all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
+# code size when deploying.
+console_error_panic_hook = { version = "0.1.7", optional = true }
+js-sys = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde-wasm-bindgen = "0.4"
+nalgebra = "0.32" # 强大的线性代数库
+candle-core = { git = "https://github.com/huggingface/candle.git" }
+candle-nn = { git = "https://github.com/huggingface/candle.git" }
+candle-transformers = { git = "https://github.com/huggingface/candle.git" }
+tokenizers = { version = "0.15", default-features = false, features = [
+    "unstable_wasm",
+] }
+[dev-dependencies]
+wasm-bindgen-test = "0.3.34"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[profile.release]
+# Tell `rustc` to optimize for small code size.
+opt-level = "s"

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Gesture-Music AI-WASM Engine</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="ui">
+      <h2>Aether Maestro</h2>
+      <div class="status">
+        AI Hand-Tracking: <span id="ai-status">Initializing...</span>
+      </div>
+    </div>
+
+    <div id="start-hint">
+      <button id="start-btn">START ENGINE</button>
+      <p>Ensure camera access is allowed</p>
+    </div>
+
+    <canvas id="render-canvas"></canvas>
+    <video id="webcam" autoplay playsinline></video>
+    <canvas
+      id="capture-canvas"
+      width="224"
+      height="224"
+      style="display: none"
+    ></canvas>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

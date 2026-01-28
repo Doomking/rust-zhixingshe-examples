@@ -1,0 +1,54 @@
+[package]
+name = "flow-matter-ai"
+version = "0.1.0"
+authors = ["doomking <xghan.cn@gmail.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+console_error_panic_hook = { version = "0.1.7", optional = true }
+# 核心依赖：使用 git 源码，并开启 'ug' 特性, 即Unstable GPU
+candle = { git = "https://github.com/huggingface/candle.git", package = "candle-core", features = [
+    "ug",
+] }
+candle-nn = { git = "https://github.com/huggingface/candle.git" }
+candle-transformers = { git = "https://github.com/huggingface/candle.git" }
+safetensors = "0.4"
+getrandom = { version = "0.2.17", features = ["js"] }
+rand = "0.8"
+# web-sys 保持现状，确保 GPU 特性开启
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Gpu",
+    "GpuAdapter",
+    "GpuDevice",
+    "GpuCanvasContext",
+    "GpuTextureFormat",
+    "GpuBuffer",
+] }
+tokenizers = { version = "0.15", default-features = false, features = [
+    "unstable_wasm",
+] }
+wasm-bindgen = "0.2.84"
+wasm-bindgen-futures = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+serde_json = "1.0"
+fundsp = "0.23.0"
+anyhow = "1.0"
+image = "0.25.9"
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.34"
+
+[profile.release]
+lto = true
+opt-level = 3

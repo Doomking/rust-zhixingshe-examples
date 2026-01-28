@@ -13,3 +13,4 @@ wasm/**/model/
 
 # Virtual environments
 **/.venv
+wasm/flow-matter-ai/**/images/

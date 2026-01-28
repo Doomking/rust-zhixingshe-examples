@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flow-Matter-AI | 赛博物质解构实验室</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet"> -->
+</head>
+
+<body>
+  <div id="app-container">
+    <header>
+      <span class="logo">FLOW-MATTER-AI</span>
+      <div id="status-tag">STATUS: <span id="status-text">SYSTEM READY</span></div>
+    </header>
+
+    <div class="main-layout">
+      <div id="canvas-wrapper">
+        <img id="source-image" src="./assets/images/img1.jpg" alt="Source" />
+        <canvas id="fluid-canvas"></canvas>
+
+        <div id="loading-overlay">
+          <div class="loader-arc"></div>
+          <div class="loader-text">图像编码中...</div>
+        </div>
+      </div>
+
+      <aside class="gallery">
+        <h3>SELECT SOURCE</h3>
+      </aside>
+    </div>
+
+    <footer>
+      <button id="collapse-btn">TRIGGER COLLAPSE (SPACE)</button>
+      <div class="audio-info">
+        <span id="material-label">MATERIAL: NONE</span>
+        <div class="audio-visualizer" id="visualizer"></div>
+      </div>
+    </footer>
+  </div>
+
+  <script src="./main.js" type="module"></script>
+</body>
+
+</html>

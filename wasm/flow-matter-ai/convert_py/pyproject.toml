@@ -1,0 +1,14 @@
+[project]
+name = "tf2safetensors"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.23.0,<1.24",
+
+    "safetensors>=0.7.0",
+    "tensorflow-macos>=2.15.0,<2.16; sys_platform == 'darwin'",
+    "tensorflow>=2.15.0,<2.16; sys_platform != 'darwin'",
+    "torch>=2.10.0",
+]

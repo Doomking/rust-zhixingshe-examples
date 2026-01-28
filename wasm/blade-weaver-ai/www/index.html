@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Blade Weaver AI</title>
+    <link rel="stylesheet" href="./style/style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.x/vision_bundle.js",
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="game-canvas"></canvas>
+
+    <div id="ui-layer">
+      <h1 id="title">BLADE WEAVER AI</h1>
+      <div id="ai-subtitle">AI 正在准备中...</div>
+      <button id="start-btn" disabled>加载中...</button>
+    </div>
+
+    <div id="loading-overlay">
+      <div class="spinner"></div>
+      <p>正在同步次元数据 (加载 WASM & 模型权重)...</p>
+    </div>
+
+    <script type="module" src="./js/main.js"></script>
+  </body>
+</html>
