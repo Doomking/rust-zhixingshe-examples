@@ -21,6 +21,7 @@ pub struct MaskResult {
     pub material: MaterialProperties,
     pub scaled_w: u32,
     pub scaled_h: u32,
+    pub active_pixels: u32,
 }
 
 #[wasm_bindgen]
@@ -60,11 +61,14 @@ impl InferenceApp {
         let material = MaterialProperties::from_pixel_at(img, px, py);
         let (scaled_w, scaled_h) = self.engine.img_dims;
 
+        let active_pixels = mask.iter().filter(|&&v| v > 0).count() as u32;
+
         let result = MaskResult {
             mask,
             material,
             scaled_w,
             scaled_h,
+            active_pixels,
         };
 
         Ok(serde_wasm_bindgen::to_value(&result).unwrap())

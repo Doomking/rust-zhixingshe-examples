@@ -10,6 +10,8 @@ pub struct FluidEngine {
     // 原图尺寸，用于采样
     pub img_dims: (u32, u32),
     pub scaled_dims: (u32, u32),
+    // 注入指针（循环缓冲区逻辑）
+    pub injection_ptr: usize,
 }
 
 pub struct Particle {
@@ -32,6 +34,7 @@ impl FluidEngine {
             current_material: MaterialProperties::default(),
             img_dims: (1, 1),
             scaled_dims: (1, 1),
+            injection_ptr: 0,
         }
     }
 
@@ -57,19 +60,22 @@ impl FluidEngine {
         let mut rng = rand::thread_rng();
         use rand::Rng;
 
-        // 核心修复 1：统计活跃像素，实现随机概率注入，避免“只出现在顶部”
+        // 1. 预算与其管理
+        let max_particles = 12000;
+        let target_per_click = 4000; // 这里的目标是提升每个大物体的填充感
+
+        // 2. 统计 Mask 内容
         let active_pixels = mask.iter().filter(|&&v| v > 0).count();
         if active_pixels == 0 {
             return;
         }
 
-        let target_new_particles = 1500; // 每次点击注入的期望数量
-        let spawn_prob = (target_new_particles as f32 / active_pixels as f32).min(1.0);
-        let max_total_particles = 6000; // 提升总上限
+        // 3. 计算注入概率（确保全域均匀分布）
+        let spawn_prob = (target_per_click as f32 / active_pixels as f32).min(1.0);
 
         for (idx, &is_selected) in mask.iter().enumerate() {
-            if is_selected > 0 && self.particles.len() < max_total_particles {
-                // 随机抽样实现全域均匀分布
+            if is_selected > 0 {
+                // 随机抽样决定是否在此像点生成
                 if !rng.gen_bool(spawn_prob as f64) {
                     continue;
                 }
@@ -77,28 +83,37 @@ impl FluidEngine {
                 let mask_x = (idx as u32 % 256) as f32;
                 let mask_y = (idx as u32 / 256) as f32;
 
-                // 核心修复 2：使用 (val + 0.5) 将粒子置于 4x4 网格中心，减少系统性偏移
-                let x = offset_x + (mask_x + 0.5) * 4.0 * unit_scale_x;
-                let y = offset_y + (mask_y + 0.5) * 4.0 * unit_scale_y;
+                // 核心修复：基于 4x4 网格的子像素随机抖动，增加边缘平滑和填充感
+                let jitter_x = rng.gen_range(0.0..4.0);
+                let jitter_y = rng.gen_range(0.0..4.0);
 
-                // 极致颜色多样性：基于色相的 HSL 扰动
-                let h_jitter = rng.gen_range(-25.0..25.0);
+                let x = offset_x + (mask_x * 4.0 + jitter_x) * unit_scale_x;
+                let y = offset_y + (mask_y * 4.0 + jitter_y) * unit_scale_y;
+
+                // 基于色相的颜色扰动
+                let h_jitter = rng.gen_range(-20.0..20.0);
                 let final_h = (material.hue + h_jitter + 360.0) % 360.0;
-                let final_s = rng.gen_range(0.6..1.0);
-                let final_l = rng.gen_range(0.3..0.8);
+                let (r, g, b) =
+                    hsl_to_rgb(final_h, rng.gen_range(0.7..1.0), rng.gen_range(0.4..0.8));
 
-                let (r, g, b) = hsl_to_rgb(final_h, final_s, final_l);
-
-                self.particles.push(Particle {
+                let p = Particle {
                     x,
                     y,
-                    vx: rng.gen_range(-3.5..3.5), // 增强扩散力度
-                    vy: rng.gen_range(-3.5..3.5),
+                    vx: rng.gen_range(-4.0..4.0),
+                    vy: rng.gen_range(-4.0..4.0),
                     life: 1.0,
-                    decay: rng.gen_range(0.002..0.008), // 生命周期适度延长
-                    mass: rng.gen_range(0.7..1.3),
+                    decay: rng.gen_range(0.001..0.005), // 更持久的物质
+                    mass: rng.gen_range(0.8..1.2),
                     color: (r, g, b),
-                });
+                };
+
+                // 4. 循环缓冲区逻辑：如果满了，覆盖最老的粒子
+                if self.particles.len() < max_particles {
+                    self.particles.push(p);
+                } else {
+                    self.particles[self.injection_ptr] = p;
+                    self.injection_ptr = (self.injection_ptr + 1) % max_particles;
+                }
             }
         }
     }

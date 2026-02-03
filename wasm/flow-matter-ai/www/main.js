@@ -31,7 +31,7 @@ const vs = `
         vec2 zeroToOne = a_position / u_resolution;
         vec2 zeroToTwo = zeroToOne * 2.0;
         vec2 clipSpace = zeroToTwo - 1.0;
-        
+
         // 大幅增加粒子尺寸方案
         // 基础大小 2.0，生命值加成从 4.0 到 12.0
         gl_PointSize = (2.0 + a_life * 12.0);
@@ -48,15 +48,15 @@ const fs = `
     void main() {
         float dist = distance(gl_PointCoord, vec2(0.5));
         if (dist > 0.5) discard;
-        
+
         // 极致视觉：脉冲边缘 + 核心光辉
         float core = (1.0 - smoothstep(0.0, 0.2, dist));
         float glow = (1.0 - smoothstep(0.0, 0.5, dist));
-        
+
         // 随生命周期变化的 shimmering
         float pulse = 1.0 + 0.2 * sin(v_life * 30.0);
         float alpha = glow * v_life * 0.8;
-        
+
         // 最终颜色强化
         vec3 finalColor = v_color * pulse * 1.8;
         gl_FragColor = vec4(finalColor, alpha);
@@ -96,7 +96,7 @@ async function start() {
       const statusText = document.getElementById("loader-text");
       if (statusText) statusText.innerText = "SYSTEM READY";
     } else if (type === "MASK_READY") {
-      const { mask, material, bounds } = e.data;
+      const { mask, material, bounds, active_pixels } = e.data;
 
       if (!material) {
         console.warn("Main: Received MASK_READY but material is undefined.");
@@ -105,31 +105,38 @@ async function start() {
 
       // 1. 更新材质 UI 和音效
       const label = document.getElementById("material-label");
-      if (label) label.innerText = `MATERIAL: ${material.label?.toUpperCase() || "UNKNOWN"}`;
-      if (material.label) playMaterialSound(material);
+      if (label)
+        label.innerText = `MATERIAL: ${material.label?.toUpperCase() || "UNKNOWN"}`;
+      if (material.label) playMaterialSound(material, active_pixels);
 
       // 2. 更新 Phys Worker 物理参数
       physWorker.postMessage({
         type: "UPDATE_PARAMS",
-        data: { viscosity: material.viscosity || 0.1, density: material.density || 1.0 }
+        data: {
+          viscosity: material.viscosity || 0.1,
+          density: material.density || 1.0,
+        },
       });
 
       // 3. 注入粒子
-      physWorker.postMessage({
-        type: "INJECT",
-        data: {
-          mask,
-          imgW: currentImageDims.w,
-          imgH: currentImageDims.h,
-          offset_x: bounds.left,
-          offset_y: bounds.top,
-          display_w: bounds.width,
-          display_h: bounds.height,
-          scaled_w: e.data.scaled_w,
-          scaled_h: e.data.scaled_h,
-          material
-        }
-      }, [mask.buffer]);
+      physWorker.postMessage(
+        {
+          type: "INJECT",
+          data: {
+            mask,
+            imgW: currentImageDims.w,
+            imgH: currentImageDims.h,
+            offset_x: bounds.left,
+            offset_y: bounds.top,
+            display_w: bounds.width,
+            display_h: bounds.height,
+            scaled_w: e.data.scaled_w,
+            scaled_h: e.data.scaled_h,
+            material,
+          },
+        },
+        [mask.buffer],
+      );
     } else if (type === "ERROR") {
       console.error("AIWorker Error:", error);
       alert("AI Error: " + error);
@@ -173,12 +180,12 @@ async function start() {
 
   aiWorker.postMessage({
     type: "INIT",
-    data: { modelData }
+    data: { modelData },
   });
 
   physWorker.postMessage({
     type: "INIT",
-    data: { width: canvas.width, height: canvas.height }
+    data: { width: canvas.width, height: canvas.height },
   });
 
   // 4. 处理窗口 Resize
@@ -189,7 +196,7 @@ async function start() {
     gl.viewport(0, 0, canvas.width, canvas.height);
     physWorker.postMessage({
       type: "RESIZE",
-      data: { width: canvas.width, height: canvas.height }
+      data: { width: canvas.width, height: canvas.height },
     });
   });
 }
@@ -232,13 +239,19 @@ class MaterialSynth {
     this.masterGain.connect(this.delay);
   }
 
-  play(material) {
+  play(material, activePixels = 1000) {
     const now = this.ctx.currentTime;
+    const sizeFactor = Math.min(activePixels / 8000, 1.0); // 空间量级 [0, 1]
+
+    // 物体越大，延迟越深，反馈越强
+    this.delay.delayTime.linearRampToValueAtTime(0.1 + sizeFactor * 0.4, now);
+    this.delay.feedback?.linearRampToValueAtTime(0.2 + sizeFactor * 0.3, now);
+
     const filter = this.ctx.createBiquadFilter();
     const env = this.ctx.createGain();
 
     // 基础频率由色相动态决定
-    const baseFreq = material.baseFrequency || (200 + (material.hue || 0));
+    const baseFreq = material.baseFrequency || 200 + (material.hue || 0);
 
     filter.type = "lowpass";
     filter.frequency.setValueAtTime(2000, now);
@@ -262,7 +275,10 @@ class MaterialSynth {
       osc2.start(now);
       osc1.stop(now + 2.1);
       osc2.stop(now + 2.1);
-    } else if (material.label.includes("Void") || material.label.includes("Black")) {
+    } else if (
+      material.label.includes("Void") ||
+      material.label.includes("Black")
+    ) {
       const osc = this.ctx.createOscillator();
       osc.type = "sine";
       osc.frequency.setValueAtTime(baseFreq, now);
@@ -274,7 +290,10 @@ class MaterialSynth {
       osc.connect(filter);
       osc.start(now);
       osc.stop(now + 3.1);
-    } else if (material.label.includes("Red") || material.label.includes("Warm")) {
+    } else if (
+      material.label.includes("Red") ||
+      material.label.includes("Warm")
+    ) {
       const carrier = this.ctx.createOscillator();
       const modulator = this.ctx.createOscillator();
       const modGain = this.ctx.createGain();
@@ -291,7 +310,10 @@ class MaterialSynth {
       modulator.start(now);
       carrier.stop(now + 1.1);
       modulator.stop(now + 1.1);
-    } else if (material.label.includes("Blue") || material.label.includes("Water")) {
+    } else if (
+      material.label.includes("Blue") ||
+      material.label.includes("Water")
+    ) {
       const osc = this.ctx.createOscillator();
       osc.type = "sine";
       osc.frequency.setValueAtTime(baseFreq * 2, now);
@@ -333,7 +355,7 @@ async function handleImageChange(imgUrl) {
     // 获取原始像素数据供 Physics Worker 使用
     const img = new Image();
     img.src = imgUrl;
-    await new Promise(resolve => img.onload = resolve);
+    await new Promise((resolve) => (img.onload = resolve));
 
     const tempCanvas = document.createElement("canvas");
     tempCanvas.width = img.width;
@@ -348,15 +370,18 @@ async function handleImageChange(imgUrl) {
   const buffer = await resp.arrayBuffer();
   currentImageBytes = new Uint8Array(buffer);
 
-  aiWorker.postMessage({
-    type: "SET_IMAGE",
-    data: { imageBytes: buffer }
-  }, [buffer]);
+  aiWorker.postMessage(
+    {
+      type: "SET_IMAGE",
+      data: { imageBytes: buffer },
+    },
+    [buffer],
+  );
 }
 
 function setupUI() {
   // 使用事件委托或者在生成后绑定
-  document.querySelector(".gallery")?.addEventListener('click', async (e) => {
+  document.querySelector(".gallery")?.addEventListener("click", async (e) => {
     if (e.target.classList.contains("thumb-img")) {
       await handleImageChange(e.target.src);
     }
@@ -416,7 +441,12 @@ function handleCanvasClick(e) {
   const clickX = (e.clientX - rect.left) * dpr;
   const clickY = (e.clientY - rect.top) * dpr;
 
-  if (clickX < bounds.left || clickX > bounds.right || clickY < bounds.top || clickY > bounds.bottom) {
+  if (
+    clickX < bounds.left ||
+    clickX > bounds.right ||
+    clickY < bounds.top ||
+    clickY > bounds.bottom
+  ) {
     return;
   }
 
@@ -425,7 +455,7 @@ function handleCanvasClick(e) {
 
   aiWorker.postMessage({
     type: "INTERACT",
-    data: { x: xNorm, y: yNorm, bounds }
+    data: { x: xNorm, y: yNorm, bounds },
   });
 }
 
@@ -458,7 +488,7 @@ function getImageBounds(img, containerW, containerH) {
     right: left + displayW,
     bottom: top + displayH,
     width: displayW,
-    height: displayH
+    height: displayH,
   };
 }
 
@@ -469,7 +499,7 @@ function loop() {
 
   let sum = 0;
   for (let i = 0; i < byteData.length; i++) sum += byteData[i];
-  const avgAudio = (sum / byteData.length) / 255.0;
+  const avgAudio = sum / byteData.length / 255.0;
 
   // 鼠标位置 (Physical Pixels)
   // 此处可以使用简单的全局变量记录最新的鼠标位置，为简单起见先取中心
@@ -481,13 +511,13 @@ function loop() {
     isPhysBusy = true;
     physWorker.postMessage({
       type: "RENDER",
-      data: { avgAudio, mouse_x: mouseX, mouse_y: mouseY }
+      data: { avgAudio, mouse_x: mouseX, mouse_y: mouseY },
     });
 
     if (isSpacePressed) {
       physWorker.postMessage({
         type: "TRIGGER_COLLAPSE",
-        data: { avgAudio }
+        data: { avgAudio },
       });
     }
   }
@@ -508,7 +538,11 @@ function renderParticles(particles) {
 
   // 更新视口和分辨率 (防止 Resize 后不匹配)
   gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-  gl.uniform2f(gl.getUniformLocation(program, "u_resolution"), gl.canvas.width, gl.canvas.height);
+  gl.uniform2f(
+    gl.getUniformLocation(program, "u_resolution"),
+    gl.canvas.width,
+    gl.canvas.height,
+  );
 
   const posLoc = gl.getAttribLocation(program, "a_position");
   const colorLoc = gl.getAttribLocation(program, "a_color");
