@@ -1,4 +1,5 @@
 use crate::schedulers::{EulerDiscreteScheduler, EulerDiscreteSchedulerConfig};
+use crate::translator::Translator;
 use anyhow::{Error, Result};
 use candle_core::{DType, Device, IndexOp, Module, Tensor};
 use candle_nn::VarBuilder;
@@ -6,6 +7,7 @@ use candle_transformers::models::stable_diffusion::schedulers::{PredictionType, 
 use candle_transformers::models::stable_diffusion::{
     clip::ClipTextTransformer, unet_2d::UNet2DConditionModel, vae::AutoEncoderKL,
 };
+use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 
 // 引入配置定义，为了避免命名冲突使用别名 (Import Config definitions)
@@ -20,6 +22,7 @@ pub struct StableDiffusion {
     tokenizer: Tokenizer,
     scheduler: EulerDiscreteScheduler, // 使用 Euler 调度器
     device: Device,
+    translator: Arc<Mutex<Translator>>,
 }
 
 impl StableDiffusion {
@@ -88,6 +91,14 @@ impl StableDiffusion {
         };
         tokenizer.with_padding(Some(padding));
 
+        // Enforce Truncation to 77 tokens
+        let truncation = tokenizers::TruncationParams {
+            max_length: 77,
+            strategy: tokenizers::TruncationStrategy::LongestFirst,
+            ..Default::default()
+        };
+        tokenizer.with_truncation(Some(truncation));
+
         // 2. 加载配置 (Load Configs)
         let clip_config = ClipConfig::v1_5();
 
@@ -121,7 +132,7 @@ impl StableDiffusion {
         )?;
 
         let vae = AutoEncoderKL::new(
-            unsafe { VarBuilder::from_mmaped_safetensors(&[vae_weights], dtype, device)? },
+            unsafe { VarBuilder::from_mmaped_safetensors(&[vae_weights], dtype, &Device::Cpu)? },
             3,
             3,
             vae_config,
@@ -138,6 +149,12 @@ impl StableDiffusion {
         // 初始化调度器 (Initialize Scheduler)
         let scheduler = EulerDiscreteScheduler::new(scheduler_config)?;
 
+        // Initialize Translator on CPU (Marian is small, CPU is fine and safer for memory)
+        // or usage same device? Marian is small.
+        // Let's use the passed device.
+        let translator = Translator::new(device)?;
+        println!("Translator initialized.");
+
         Ok(Self {
             clip,
             vae,
@@ -145,19 +162,37 @@ impl StableDiffusion {
             tokenizer,
             scheduler,
             device: device.clone(),
+            translator: Arc::new(Mutex::new(translator)),
         })
     }
 
     /// 执行文生图任务
     pub fn generate(
         &self,
-        prompt: &str,
+        original_prompt: &str,
         n_steps: usize,
         guidance_scale: f64,
     ) -> Result<image::DynamicImage> {
+        // 0. Neural Translation (Chinese -> English)
+        let mut prompt = original_prompt.to_string();
+
+        // Attempt translation
+        match self.translator.lock().unwrap().translate(original_prompt) {
+            Ok(translated) => {
+                prompt = translated;
+            }
+            Err(e) => {
+                println!("Translation failed: {}, utilizing original prompt", e);
+            }
+        }
+
+        // Force Anime Style
+        let style_suffix = ", Studio Ghibli style, Hayao Miyazaki, pastel colors, bright sky, hand-drawn style, cheerful atmosphere, soft lighting, cel shaded, warm tones, masterpiece, best quality";
+        prompt.push_str(style_suffix);
+
         println!(
-            "开始生成 (Starting Generation): Prompt='{}', Steps={}, Scale={}",
-            prompt, n_steps, guidance_scale
+            "开始生成 (Starting Generation): Original='{}' -> Processed='{}', Steps={}, Scale={}",
+            original_prompt, prompt, n_steps, guidance_scale
         );
 
         // 1. 文本编码 (Text Encoding)

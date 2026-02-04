@@ -53,3 +53,4 @@ coverage/
 
 
 manga/**/models/
+manga/**/output/

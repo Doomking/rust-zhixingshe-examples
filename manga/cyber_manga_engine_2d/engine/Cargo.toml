@@ -17,7 +17,7 @@ candle-core = { version = "0.9.1", features = ["metal", "accelerate"] }
 candle-transformers = "0.9.1"
 candle-nn = { version = "0.9.1", features = ["metal"] }
 hf-hub = "0.3.2"                                                        # 模型下载与缓存
-tokenizers = "0.19.1"                                                   # 分词器
+tokenizers = { version = "0.19.1", features = ["http"] }                # 分词器
 
 # 图像处理与后期排版
 image = "0.25"
@@ -28,3 +28,4 @@ ab_glyph = "0.2"   # 用于在图片上渲染中文字体 (imageproc compatible)
 tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1.0"
+dunce = "1.0.5"

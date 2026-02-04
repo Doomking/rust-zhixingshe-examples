@@ -1,6 +1,8 @@
+mod director;
 mod manga;
 mod schedulers;
 mod sd;
+mod translator;
 
 use axum::{
     extract::State,
@@ -11,7 +13,8 @@ use axum::{
 };
 use base64::{engine::general_purpose, Engine as _};
 use candle_core::Device;
-use manga::{MangaGenerator, Panel};
+use director::Director;
+use manga::Panel; // Keep Panel for response compatibility
 use sd::StableDiffusion;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
@@ -26,12 +29,13 @@ struct ImageResponse {
 struct MangaResponse {
     image: String,
     panels: Vec<Panel>,
+    video: Option<String>,
 }
 
 #[derive(Clone)]
 struct AppState {
     sd: Arc<StableDiffusion>,
-    manga: Arc<MangaGenerator>,
+    director: Arc<Director>,
 }
 
 #[derive(Deserialize)]
@@ -77,15 +81,15 @@ async fn main() {
         }
     };
 
-    let manga = match MangaGenerator::new(sd.clone()) {
-        Ok(m) => Arc::new(m),
+    let director = match Director::new(sd.clone()) {
+        Ok(d) => Arc::new(d),
         Err(e) => {
-            tracing::error!("Failed to initialize MangaGenerator (Check fonts?): {}", e);
+            tracing::error!("Failed to initialize Director: {}", e);
             return;
         }
     };
 
-    let state = AppState { sd, manga };
+    let state = AppState { sd, director };
 
     tracing::info!("Models loaded successfully!");
 
@@ -156,30 +160,72 @@ async fn generate_manga(
 ) -> impl IntoResponse {
     tracing::info!("Received manga script (length: {})", payload.script.len());
 
-    match state.manga.generate_manga(&payload.script).await {
-        Ok((image, panels)) => {
-            let mut bytes: Vec<u8> = Vec::new();
-            match image.write_to(
-                &mut std::io::Cursor::new(&mut bytes),
-                image::ImageFormat::Png,
-            ) {
-                Ok(_) => {
-                    let b64 = general_purpose::STANDARD.encode(&bytes);
-                    let data_uri = format!("data:image/png;base64,{}", b64);
-
-                    let response = MangaResponse {
-                        image: data_uri,
-                        panels,
-                    };
-
-                    tracing::info!("Manga generated with metadata");
-                    (StatusCode::OK, Json(response)).into_response()
-                }
+    match state.director.produce(&payload.script) {
+        Ok((storyboard, video_path)) => {
+            // Read video bytes
+            let video_bytes = match std::fs::read(&video_path) {
+                Ok(b) => b,
                 Err(e) => {
-                    tracing::error!("Failed to encode manga image: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Failed to encode image").into_response()
+                    tracing::error!("Failed to read generated video: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to read generated video: {}", e),
+                    )
+                        .into_response();
                 }
-            }
+            };
+
+            let b64_vid = general_purpose::STANDARD.encode(&video_bytes);
+            let video_uri = format!("data:video/mp4;base64,{}", b64_vid);
+
+            // Convert Storyboard Shots to Panels for frontend compatibility
+            let panels: Vec<Panel> = storyboard
+                .shots
+                .iter()
+                .map(|s| Panel {
+                    role: s.character.clone(),
+                    dialogue: s.dialogue.clone(),
+                    prompt: s.visual_prompt.clone(),
+                })
+                .collect();
+
+            // For the main image, we can just return the first frame or a placeholder since it's a video now
+            // But frontend expects an image. Let's try to load the first frame edited image.
+            let first_image_uri = if let Some(first_shot) = storyboard.shots.first() {
+                if let Some(video_path) = &first_shot.video_path {
+                    // Try to find the edited image corresponding to this shot
+                    // It was saved as output/video/edited_{id}.png in Editor
+                    // BUT we don't have the path here easily unless we reconstructed it or stored it.
+                    // Shot doesn't store edited image path, only raw image path?
+                    // Wait, Editor stored `video_path`.
+                    // Let's use `image_path` (raw) for now from the Shot, or just an empty image.
+                    // The user wants video.
+                    // Use the raw image path.
+                    if let Some(img_path) = &first_shot.image_path {
+                        if let Ok(img_bytes) = std::fs::read(img_path) {
+                            let b64 = general_purpose::STANDARD.encode(&img_bytes);
+                            format!("data:image/png;base64,{}", b64)
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new() // No shots
+            };
+
+            let response = MangaResponse {
+                image: first_image_uri,
+                panels,
+                video: Some(video_uri),
+            };
+
+            tracing::info!("Manga generated with metadata (Video available)");
+            (StatusCode::OK, Json(response)).into_response()
         }
         Err(e) => {
             tracing::error!("Manga Generation failed: {}", e);

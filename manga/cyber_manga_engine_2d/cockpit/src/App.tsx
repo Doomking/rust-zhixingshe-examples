@@ -6,6 +6,7 @@ function App() {
   const [mode, setMode] = useState<'image' | 'manga'>('image');
   const [generating, setGenerating] = useState(false);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [panels, setPanels] = useState<any[]>([]);
   const [errorUrl, setError] = useState<string | null>(null);
 
@@ -14,6 +15,7 @@ function App() {
     setGenerating(true);
     setError(null);
     setImageUrl(null);
+    setVideoUrl(null);
     setPanels([]);
 
     const endpoint = mode === 'image' ? '/api/generate' : '/api/generate_manga';
@@ -35,10 +37,11 @@ function App() {
       if (mode === 'image') {
         const data = await response.json();
         setImageUrl(data.image);
-        setPanels([]); // Clear panels for single image
+        setPanels([]);
       } else {
         const data = await response.json();
         setImageUrl(data.image);
+        setVideoUrl(data.video); // Set video state
         setPanels(data.panels);
       }
 
@@ -50,14 +53,20 @@ function App() {
     }
   };
 
-  const openPlayer = (url: string) => {
+  const openPlayer = (imgUrl: string, vidUrl?: string | null) => {
     const player = document.getElementById('video-player');
     const img = document.getElementById('projector-img') as HTMLImageElement;
-    if (player && img) {
-      img.src = url;
+
+    if (player) {
+      // If we have video, relying on React State to render <video>, but we need to show modal
       player.style.display = 'flex';
 
-      // Start Narration
+      // Fallback for image only mode if needed
+      if (img && !vidUrl) {
+        img.src = imgUrl;
+      }
+
+      // Start Narration (Dubbing for the video)
       if (panels.length > 0) {
         speakScript(panels);
       }
@@ -137,14 +146,24 @@ function App() {
       </div>
 
       <div className="result-area">
-        {imageUrl ? (
+        {mode === 'manga' && videoUrl ? (
+          <div className="video-container" style={{ textAlign: 'center', width: '100%' }}>
+            <video
+              src={videoUrl}
+              controls
+              autoPlay
+              className="generated-video"
+              style={{ maxWidth: '100%', maxHeight: '80vh', border: '2px solid #0ff', boxShadow: '0 0 20px #0ff' }}
+            />
+            <div className="action-buttons" style={{ marginTop: '10px' }}>
+              <a href={videoUrl} download="manga.mp4" className="download-link">Download Video</a>
+            </div>
+          </div>
+        ) : imageUrl ? (
           <div className="image-container">
             <img src={imageUrl} alt="Generated" className="generated-image" />
             <div className="action-buttons">
               <a href={imageUrl} download="generated.png" className="download-link">Download Image</a>
-              {mode === 'manga' && (
-                <button className="play-btn" onClick={() => openPlayer(imageUrl!)}>PROJECTION START</button>
-              )}
             </div>
           </div>
         ) : (
@@ -152,14 +171,6 @@ function App() {
             {generating ? <div className="loader">Creating Art...</div> : <p>Your creation will appear here</p>}
           </div>
         )}
-      </div>
-
-      {/* Video Player Modal */}
-      <div id="video-player" className="video-overlay" style={{ display: 'none' }} onClick={closePlayer}>
-        <div className="video-content">
-          <img id="projector-img" src="" className="scrolling-image" alt="Manga Projection" />
-          <div className="video-ui">PLAYING...</div>
-        </div>
       </div>
     </div>
   );
