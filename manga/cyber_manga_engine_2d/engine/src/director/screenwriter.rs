@@ -21,10 +21,26 @@ impl Screenwriter {
 
                 // Auto-discover character if new
                 if !characters.contains_key(&role) {
+                    // Voice Diversity Logic:
+                    // Assign a voice based on the order of appearance (characters.len()).
+                    let available_voices = vec![
+                        "zh-CN-XiaoxiaoNeural", // Female
+                        "zh-CN-YunxiNeural",    // Male
+                        "zh-CN-XiaoyiNeural",   // Female
+                        "zh-CN-YunjianNeural",  // Male
+                        "zh-CN-XiaouNeural",    // Female
+                        "zh-CN-LibaoNeural",    // Male (Child?)
+                    ];
+                    let voice_idx = characters.len() % available_voices.len();
+                    let selected_voice = available_voices[voice_idx];
+
                     let character = Character {
                         name: role.clone(),
-                        voice_id: "zh-CN-XiaoxiaoNeural".to_string(), // Default, will refine later
-                        visual_tags: format!("{}, Studio Ghibli style", role), // Basic consistency tag
+                        voice_id: selected_voice.to_string(),
+                        visual_tags: format!(
+                            "{}, matches role {}, Studio Ghibli style",
+                            role, role
+                        ),
                     };
                     characters.insert(role.clone(), character);
                 }
@@ -36,7 +52,7 @@ impl Screenwriter {
                     dialogue,
                     visual_prompt: String::new(), // Will be filled by Cinematographer
                     audio_path: None,
-                    image_path: None,
+                    image_paths: Vec::new(),
                     video_path: None,
                     duration: 3.0,
                 };

@@ -28,34 +28,112 @@ impl Editor {
 
         let mut clip_paths = Vec::new();
 
-        let total_shots = storyboard.shots.len();
-
         for shot in &mut storyboard.shots {
-            if let (Some(img_path), Some(audio_path)) = (&shot.image_path, &shot.audio_path) {
-                // 1. Load Image
-                let mut image = image::open(img_path)?;
+            if let (Some(audio_path), false) = (&shot.audio_path, shot.image_paths.is_empty()) {
+                let num_frames = shot.image_paths.len();
+                let frame_duration = shot.duration / (num_frames as f64);
 
-                // 2. Overlay Text
-                self.render_speech_bubble(
-                    &mut image,
-                    &shot.character,
-                    &shot.dialogue,
-                    shot.id,
-                    total_shots,
+                // 1. Process Keyframes (Resize + Subtitles)
+                let mut processed_image_paths = Vec::new();
+
+                for (idx, img_path) in shot.image_paths.iter().enumerate() {
+                    let image = image::open(img_path)?;
+
+                    // Resize to 720x1280 (Lanczos3)
+                    let target_w = 720;
+                    let target_h = 1280;
+                    let mut bg_image = image.resize_to_fill(
+                        target_w,
+                        target_h,
+                        image::imageops::FilterType::Lanczos3,
+                    );
+
+                    // Overlay Subtitles
+                    // NEW STYLE: No Box, No Name, Outlined Text, Wider
+                    self.render_subtitle(&mut bg_image, &shot.dialogue);
+
+                    let processed_path =
+                        output_dir.join(format!("processed_{}_{}.png", shot.id, idx));
+                    bg_image.save(&processed_path)?;
+                    processed_image_paths.push(processed_path);
+                }
+
+                // 2. Generate Video Clip for this Shot
+                // We use a complex filter to loop each image for frame_duration and concat them.
+                // Or generate temp clips. Temp clips is robust.
+
+                let mut shot_clips = Vec::new();
+                for (idx, p_img_path) in processed_image_paths.iter().enumerate() {
+                    let sub_clip = output_dir.join(format!("subclip_{}_{}.mp4", shot.id, idx));
+                    // Visual only clip
+                    self.generate_visual_clip(p_img_path, &sub_clip, frame_duration)?;
+                    shot_clips.push(sub_clip);
+                }
+
+                // Concat visual clips -> shot_visual.mp4
+                let visual_concat_list = output_dir.join(format!("list_visual_{}.txt", shot.id));
+                let content = shot_clips
+                    .iter()
+                    .map(|p| format!("file '{}'", p.file_name().unwrap().to_str().unwrap()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                std::fs::write(&visual_concat_list, content)?;
+
+                let shot_visual = output_dir.join(format!("shot_visual_{}.mp4", shot.id));
+
+                // ffmpeg concat visual
+                let status = std::process::Command::new("ffmpeg")
+                    .arg("-y")
+                    .arg("-f")
+                    .arg("concat")
+                    .arg("-safe")
+                    .arg("0")
+                    .arg("-i")
+                    .arg(&visual_concat_list)
+                    .arg("-c")
+                    .arg("copy")
+                    .arg(&shot_visual)
+                    .status()?;
+
+                if !status.success() {
+                    return Err(Error::msg("Failed to concat visual clips"));
+                }
+
+                // 3. Merge with Audio
+                let final_shot_clip = output_dir.join(format!("clip_{}.mp4", shot.id));
+                // -shortest to clip visual if audio is shorter (or vice versa, usually audio dictates)
+                let status2 = std::process::Command::new("ffmpeg")
+                    .arg("-y")
+                    .arg("-i")
+                    .arg(&shot_visual)
+                    .arg("-i")
+                    .arg(audio_path)
+                    .arg("-c:v")
+                    .arg("copy")
+                    .arg("-c:a")
+                    .arg("aac")
+                    .arg("-shortest") // Cut to shortest stream logic
+                    .arg(&final_shot_clip)
+                    .status()?;
+
+                if !status2.success() {
+                    return Err(Error::msg("Failed to merge audio"));
+                }
+
+                shot.video_path = Some(
+                    final_shot_clip
+                        .canonicalize()
+                        .unwrap_or(final_shot_clip.clone()),
                 );
-
-                // 3. Save Edited Image
-                let edited_img_path = output_dir.join(format!("edited_{}.png", shot.id));
-                image.save(&edited_img_path)?;
-
-                // 4. Generate Clip
-                let clip_path = output_dir.join(format!("clip_{}.mp4", shot.id));
-                self.generate_clip(&edited_img_path, audio_path, &clip_path, shot.duration)?;
-
-                shot.video_path = Some(clip_path.canonicalize().unwrap_or(clip_path.clone()));
                 clip_paths.push(format!(
                     "file '{}'",
-                    shot.video_path.as_ref().unwrap().to_str().unwrap()
+                    shot.video_path
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
                 ));
             }
         }
@@ -86,59 +164,52 @@ impl Editor {
         Ok(output_path)
     }
 
-    fn generate_clip(
+    fn generate_visual_clip(
         &self,
         img_path: &Path,
-        audio_path: &Path,
         output_path: &Path,
-        audio_duration: f64,
+        duration: f64,
     ) -> Result<()> {
-        // Video Duration = Audio Duration + 0.5s padding
-        let video_duration = audio_duration + 0.5;
+        // Zoom/Pan for mobile
+        let w = 720;
+        let h = 1280;
 
-        // Ken Burns Effect: Zoom in slightly (zoom=1.0 to 1.1) over duration
-        // fps=30
-
+        // OPTIMIZATION: Slower zoom for less "jitter" (0.0005 -> 0.0003)
+        // Ensure smooth transition.
         let status = std::process::Command::new("ffmpeg")
             .arg("-y")
             .arg("-loop").arg("1")
             .arg("-i").arg(img_path)
-            .arg("-i").arg(audio_path)
-            .arg("-vf").arg(format!("zoompan=z='min(zoom+0.0002,1.05)':d={}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=896x1152:fps=30", (video_duration * 30.0) as i32)) 
-            .arg("-r").arg("30")  // Explicit 30fps output
+            .arg("-vf").arg(format!("zoompan=z='min(zoom+0.0003,1.1)':d={}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={}x{}:fps=30", (duration * 30.0) as i32, w, h)) 
+            .arg("-r").arg("30")
             .arg("-c:v").arg("libx264")
             .arg("-pix_fmt").arg("yuv420p")
-            .arg("-c:a").arg("aac")
-            .arg("-t").arg(format!("{}", video_duration))
-            .arg("-shortest") 
+            .arg("-t").arg(format!("{}", duration))
             .arg(output_path)
             .status()?;
 
         if !status.success() {
-            return Err(Error::msg("ffmpeg clip generation failed"));
+            return Err(Error::msg("ffmpeg visual clip generation failed"));
         }
         Ok(())
     }
 
-    pub fn render_speech_bubble(
-        &self,
-        image: &mut DynamicImage,
-        role: &str,
-        text: &str,
-        bubble_idx: usize,
-        total_bubbles: usize,
-    ) {
+    pub fn render_subtitle(&self, image: &mut DynamicImage, text: &str) {
         let img_width = image.width() as i32;
         let img_height = image.height() as i32;
-        let scale = PxScale::from(24.0);
-        let padding_x = 20;
-        let padding_y = 15;
-        let max_text_width = (img_width - 80).max(100); // Max width allowed for text
+
+        // OPTIMIZATION: Smaller font (42 -> 36) to encourage single line
+        let scale = PxScale::from(36.0);
+        let padding_x = 20; // Reduce padding to allow more text width
+        let _padding_y = 20;
+        let max_text_width = (img_width - (padding_x * 2)).max(100);
+        let _padding_y = 20; // Removed unused variable underscore if not used
+        let max_text_width = (img_width - (padding_x * 2)).max(100);
 
         // 1. Text Wrapping Logic
         let mut lines = Vec::new();
         let mut current_line = String::new();
-        let char_width = 24.0; // Approximation for CJK/Monospace
+        let char_width = 40.0; // Approx for larger font
 
         for char in text.chars() {
             let current_width = (current_line.chars().count() as f32 * char_width) as i32;
@@ -152,68 +223,49 @@ impl Editor {
             lines.push(current_line);
         }
 
-        // 2. Calculate Dimensions
-        let line_height = 30;
-        let text_block_height = lines.len() as i32 * line_height;
-        let longest_line_width = lines
-            .iter()
-            .map(|l| (l.chars().count() as f32 * char_width) as i32)
-            .max()
-            .unwrap_or(0);
+        // 2. Position: Bottom center
+        let line_height = 50;
+        let total_text_height = lines.len() as i32 * line_height;
+        let y_start = img_height - total_text_height - 100; // 100px from bottom
 
-        let bubble_width = longest_line_width + (padding_x * 2);
-        let bubble_height = text_block_height + (padding_y * 2);
-
-        // 3. Position based on bubble index (simplified for now to just alternate top/bottom)
-        // If bubble_idx is even -> Top, if odd -> Bottom (or vice versa? let's stick to simple logic)
-        let (x, y) = if bubble_idx % 2 == 0 {
-            // Top
-            ((img_width - bubble_width) / 2, 50)
-        } else {
-            // Bottom
-            (
-                (img_width - bubble_width) / 2,
-                img_height - bubble_height - 50,
-            )
-        };
-
-        // 4. Draw Bubble (White Background with slight transparency)
-        draw_filled_rect_mut(
-            image,
-            Rect::at(x, y).of_size(bubble_width as u32, bubble_height as u32),
-            Rgba([255u8, 255u8, 255u8, 240u8]),
-        );
-
-        // 5. Draw Text Lines
+        // 3. Draw Text with Outline
         for (i, line) in lines.iter().enumerate() {
+            let y_pos = y_start + (i as i32 * line_height);
+            let x_pos = padding_x;
+
+            // Simulate Stroke (Outline) - Draw black text at offsets
+            let offsets = [
+                (-2, -2),
+                (-2, 2),
+                (2, -2),
+                (2, 2),
+                (0, -2),
+                (0, 2),
+                (-2, 0),
+                (2, 0),
+            ];
+            for (ox, oy) in offsets {
+                draw_text_mut(
+                    image,
+                    Rgba([0u8, 0u8, 0u8, 255u8]), // Black
+                    x_pos + ox,
+                    y_pos + oy,
+                    scale,
+                    &self.font,
+                    line,
+                );
+            }
+
+            // Draw Inner White Text
             draw_text_mut(
                 image,
-                Rgba([0u8, 0u8, 0u8, 255u8]),
-                x + padding_x,
-                y + padding_y + (i as i32 * line_height),
+                Rgba([255u8, 255u8, 255u8, 255u8]), // White
+                x_pos,
+                y_pos,
                 scale,
                 &self.font,
                 line,
             );
         }
-
-        // 6. Draw Role Label
-        let role_scale = PxScale::from(16.0);
-        let role_width = (role.chars().count() as f32 * 16.0) as i32;
-        // Draw Role Badge Background
-        draw_filled_rect_mut(
-            image,
-            Rect::at(x, y - 24).of_size((role_width + 10) as u32, 24),
-            Rgba([0u8, 0u8, 0u8, 180u8]), // Semi-transparent black
-        );
-        draw_text_mut(
-            image,
-            Rgba([255u8, 255u8, 255u8, 255u8]), // White text
-            x + 5,
-            y - 22,
-            role_scale,
-            &self.font,
-            role,
-        );
     }
 }

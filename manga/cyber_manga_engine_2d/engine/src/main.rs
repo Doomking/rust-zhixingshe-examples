@@ -160,7 +160,7 @@ async fn generate_manga(
 ) -> impl IntoResponse {
     tracing::info!("Received manga script (length: {})", payload.script.len());
 
-    match state.director.produce(&payload.script) {
+    match state.director.produce(&payload.script).await {
         Ok((storyboard, video_path)) => {
             // Read video bytes
             let video_bytes = match std::fs::read(&video_path) {
@@ -192,7 +192,7 @@ async fn generate_manga(
             // For the main image, we can just return the first frame or a placeholder since it's a video now
             // But frontend expects an image. Let's try to load the first frame edited image.
             let first_image_uri = if let Some(first_shot) = storyboard.shots.first() {
-                if let Some(video_path) = &first_shot.video_path {
+                if first_shot.video_path.is_some() {
                     // Try to find the edited image corresponding to this shot
                     // It was saved as output/video/edited_{id}.png in Editor
                     // BUT we don't have the path here easily unless we reconstructed it or stored it.
@@ -201,7 +201,7 @@ async fn generate_manga(
                     // Let's use `image_path` (raw) for now from the Shot, or just an empty image.
                     // The user wants video.
                     // Use the raw image path.
-                    if let Some(img_path) = &first_shot.image_path {
+                    if let Some(img_path) = first_shot.image_paths.first() {
                         if let Ok(img_bytes) = std::fs::read(img_path) {
                             let b64 = general_purpose::STANDARD.encode(&img_bytes);
                             format!("data:image/png;base64,{}", b64)

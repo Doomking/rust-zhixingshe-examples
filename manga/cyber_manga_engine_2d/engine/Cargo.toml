@@ -11,6 +11,10 @@ tower-http = { version = "0.5", features = ["cors", "fs"] } # 处理跨域和静
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.21"
+reqwest = { version = "0.11", features = ["blocking"] }
+flate2 = "1.0"
+tar = "0.4"
+msedge-tts = "0.3"
 
 # AI 推理引擎 (Candle)
 candle-core = { version = "0.9.1", features = ["metal", "accelerate"] }

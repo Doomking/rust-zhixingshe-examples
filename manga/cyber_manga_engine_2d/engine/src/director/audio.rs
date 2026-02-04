@@ -1,4 +1,7 @@
 use anyhow::{Error, Result};
+use msedge_tts::tts::client::connect_async;
+use msedge_tts::tts::SpeechConfig;
+use msedge_tts::voice::get_voices_list_async;
 use std::path::Path;
 
 pub struct SoundEngineer {}
@@ -8,24 +11,45 @@ impl SoundEngineer {
         Self {}
     }
 
-    pub fn construct_soundtrack(&self, storyboard: &mut crate::director::Storyboard) -> Result<()> {
+    pub async fn construct_soundtrack(
+        &self,
+        storyboard: &mut crate::director::Storyboard,
+    ) -> Result<()> {
         let output_dir = std::path::Path::new("output/audio");
         if !output_dir.exists() {
             std::fs::create_dir_all(output_dir)?;
         }
 
-        for shot in &mut storyboard.shots {
-            let voice_id = if let Some(c) = storyboard.characters.get(&shot.character) {
-                &c.voice_id
-            } else {
-                "zh-CN-XiaoxiaoNeural"
-            };
+        // Fetch voices once to avoid repetition (though construct_soundtrack calls record_voice multiple times)
+        // Optimization: We could fetch once and pass to record_voice, but for now kept simple inside record_voice.
+        // Actually, let's fetch here to avoid network spam.
+        let voices = get_voices_list_async()
+            .await
+            .map_err(|e| Error::msg(format!("Failed to fetch voices: {:?}", e)))?;
 
+        let target_voice = voices
+            .iter()
+            .find(|v| v.short_name.as_deref() == Some("zh-CN-XiaoxiaoNeural"))
+            .or_else(|| {
+                voices
+                    .iter()
+                    .find(|v| v.short_name.as_deref().unwrap_or("").contains("Xiaoxiao"))
+            })
+            .or_else(|| {
+                voices
+                    .iter()
+                    .find(|v| v.short_name.as_deref().unwrap_or("").starts_with("zh-CN"))
+            })
+            .ok_or_else(|| Error::msg("No suitable Chinese voice found"))?;
+
+        for shot in &mut storyboard.shots {
             let filename = format!("voice_{}.mp3", shot.id);
             let path = output_dir.join(filename);
 
-            self.record_voice(&shot.dialogue, voice_id, &path)?;
+            self.record_voice(&shot.dialogue, target_voice, &path)
+                .await?;
 
+            // Note: get_duration uses ffprobe, which works for mp3.
             let duration = self.get_duration(&path).unwrap_or(3.0);
             shot.duration = duration;
             shot.audio_path = Some(path.canonicalize().unwrap_or(path));
@@ -33,38 +57,28 @@ impl SoundEngineer {
         Ok(())
     }
 
-    pub fn record_voice(&self, text: &str, voice_id: &str, output_path: &Path) -> Result<()> {
-        // Simple Edge-TTS wrapper
-        let status = std::process::Command::new("edge-tts")
-            .arg("--voice")
-            .arg(voice_id)
-            .arg("--text")
-            .arg(text)
-            .arg("--write-media")
-            .arg(output_path)
-            .status();
+    pub async fn record_voice(
+        &self,
+        text: &str,
+        voice: &msedge_tts::voice::Voice,
+        output_path: &Path,
+    ) -> Result<()> {
+        // Rust Edge-TTS (msedge-tts)
+        // connect_async() takes no arguments
+        let mut client = connect_async()
+            .await
+            .map_err(|e| Error::msg(format!("Failed to connect to Edge TTS: {:?}", e)))?;
 
-        match status {
-            Ok(s) if s.success() => Ok(()),
-            _ => {
-                // Fallback to python module
-                let status2 = std::process::Command::new("python3")
-                    .arg("-m")
-                    .arg("edge_tts")
-                    .arg("--voice")
-                    .arg(voice_id)
-                    .arg("--text")
-                    .arg(text)
-                    .arg("--write-media")
-                    .arg(output_path)
-                    .status()?;
+        let config = SpeechConfig::from(voice);
 
-                if !status2.success() {
-                    return Err(Error::msg("TTS generation failed"));
-                }
-                Ok(())
-            }
-        }
+        // synthesize takes text and config
+        let audio = client
+            .synthesize(text, &config)
+            .await
+            .map_err(|e| Error::msg(format!("Failed to synthesize speech: {:?}", e)))?;
+
+        std::fs::write(output_path, audio.audio_bytes)?;
+        Ok(())
     }
 
     pub fn get_duration(&self, audio_path: &Path) -> Result<f64> {

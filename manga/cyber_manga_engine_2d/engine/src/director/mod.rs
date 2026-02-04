@@ -22,7 +22,7 @@ pub struct Shot {
     // Director's instructions
     pub visual_prompt: String, // Full prompt for SD
     pub audio_path: Option<PathBuf>,
-    pub image_path: Option<PathBuf>,
+    pub image_paths: Vec<PathBuf>,
     pub video_path: Option<PathBuf>, // Path to the generated clip (image + audio + zoompan)
     pub duration: f64,
 }
@@ -58,18 +58,20 @@ impl Director {
         })
     }
 
-    pub fn produce(&self, script_text: &str) -> anyhow::Result<(Storyboard, PathBuf)> {
+    pub async fn produce(&self, script_text: &str) -> anyhow::Result<(Storyboard, PathBuf)> {
         // 1. Script -> Storyboard
         let mut storyboard = self.screenwriter.write(script_text)?;
         println!("Storyboard created with {} shots", storyboard.shots.len());
 
-        // 2. Storyboard -> Images (Shot)
+        // 2. Audio (Shot) - NOW FIRST to determine duration
+        self.sound_engineer
+            .construct_soundtrack(&mut storyboard)
+            .await?;
+        println!("Soundtrack recorded");
+
+        // 3. Storyboard -> Images (Shot) - NOW SECOND to use duration
         self.cinematographer.shoot(&mut storyboard)?;
         println!("Cinematography complete");
-
-        // 3. Audio (Shot)
-        self.sound_engineer.construct_soundtrack(&mut storyboard)?;
-        println!("Soundtrack recorded");
 
         // 4. Editor -> Video
         let final_video = self.editor.edit(&mut storyboard)?;
