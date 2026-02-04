@@ -29,75 +29,29 @@ impl Editor {
         let mut clip_paths = Vec::new();
 
         for shot in &mut storyboard.shots {
-            if let (Some(audio_path), false) = (&shot.audio_path, shot.image_paths.is_empty()) {
-                let num_frames = shot.image_paths.len();
-                let frame_duration = shot.duration / (num_frames as f64);
+            // Check if audio exists and we have at least one image
+            if let (Some(audio_path), Some(img_path)) = (&shot.audio_path, shot.image_paths.first())
+            {
+                // 1. Process Keyframe (Resize + Subtitles)
+                let image = image::open(img_path)?;
 
-                // 1. Process Keyframes (Resize + Subtitles)
-                let mut processed_image_paths = Vec::new();
+                // Resize to 720x1280 (Lanczos3)
+                let target_w = 720;
+                let target_h = 1280;
+                let mut bg_image =
+                    image.resize_to_fill(target_w, target_h, image::imageops::FilterType::Lanczos3);
 
-                for (idx, img_path) in shot.image_paths.iter().enumerate() {
-                    let image = image::open(img_path)?;
+                // Overlay Subtitles
+                // NEW STYLE: No Box, No Name, Outlined Text, Wider
+                self.render_subtitle(&mut bg_image, &shot.dialogue);
 
-                    // Resize to 720x1280 (Lanczos3)
-                    let target_w = 720;
-                    let target_h = 1280;
-                    let mut bg_image = image.resize_to_fill(
-                        target_w,
-                        target_h,
-                        image::imageops::FilterType::Lanczos3,
-                    );
-
-                    // Overlay Subtitles
-                    // NEW STYLE: No Box, No Name, Outlined Text, Wider
-                    self.render_subtitle(&mut bg_image, &shot.dialogue);
-
-                    let processed_path =
-                        output_dir.join(format!("processed_{}_{}.png", shot.id, idx));
-                    bg_image.save(&processed_path)?;
-                    processed_image_paths.push(processed_path);
-                }
+                let processed_path = output_dir.join(format!("processed_{}.png", shot.id));
+                bg_image.save(&processed_path)?;
 
                 // 2. Generate Video Clip for this Shot
-                // We use a complex filter to loop each image for frame_duration and concat them.
-                // Or generate temp clips. Temp clips is robust.
-
-                let mut shot_clips = Vec::new();
-                for (idx, p_img_path) in processed_image_paths.iter().enumerate() {
-                    let sub_clip = output_dir.join(format!("subclip_{}_{}.mp4", shot.id, idx));
-                    // Visual only clip
-                    self.generate_visual_clip(p_img_path, &sub_clip, frame_duration)?;
-                    shot_clips.push(sub_clip);
-                }
-
-                // Concat visual clips -> shot_visual.mp4
-                let visual_concat_list = output_dir.join(format!("list_visual_{}.txt", shot.id));
-                let content = shot_clips
-                    .iter()
-                    .map(|p| format!("file '{}'", p.file_name().unwrap().to_str().unwrap()))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                std::fs::write(&visual_concat_list, content)?;
-
+                // Visual only clip with Smooth Zoom (Ken Burns)
                 let shot_visual = output_dir.join(format!("shot_visual_{}.mp4", shot.id));
-
-                // ffmpeg concat visual
-                let status = std::process::Command::new("ffmpeg")
-                    .arg("-y")
-                    .arg("-f")
-                    .arg("concat")
-                    .arg("-safe")
-                    .arg("0")
-                    .arg("-i")
-                    .arg(&visual_concat_list)
-                    .arg("-c")
-                    .arg("copy")
-                    .arg(&shot_visual)
-                    .status()?;
-
-                if !status.success() {
-                    return Err(Error::msg("Failed to concat visual clips"));
-                }
+                self.generate_visual_clip(&processed_path, &shot_visual, shot.duration)?;
 
                 // 3. Merge with Audio
                 let final_shot_clip = output_dir.join(format!("clip_{}.mp4", shot.id));
@@ -174,17 +128,25 @@ impl Editor {
         let w = 720;
         let h = 1280;
 
-        // OPTIMIZATION: Slower zoom for less "jitter" (0.0005 -> 0.0003)
-        // Ensure smooth transition.
+        // OPTIMIZATION: Smooth continuous zoom (Ken Burns)
+        // zoom+0.001 per frame @ 30fps = ~0.03 zoom per second.
+        // This eliminates jitter by using one image.
         let status = std::process::Command::new("ffmpeg")
             .arg("-y")
-            .arg("-loop").arg("1")
-            .arg("-i").arg(img_path)
-            .arg("-vf").arg(format!("zoompan=z='min(zoom+0.0003,1.1)':d={}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={}x{}:fps=30", (duration * 30.0) as i32, w, h)) 
-            .arg("-r").arg("30")
-            .arg("-c:v").arg("libx264")
-            .arg("-pix_fmt").arg("yuv420p")
-            .arg("-t").arg(format!("{}", duration))
+            .arg("-loop")
+            .arg("1")
+            .arg("-i")
+            .arg(img_path)
+            .arg("-vf")
+            .arg(format!("zoompan=z='min(zoom+0.001,1.5)':d={}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={}x{}:fps=30", (duration * 30.0) as i32, w, h))
+            .arg("-r")
+            .arg("30")
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-pix_fmt")
+            .arg("yuv420p")
+            .arg("-t")
+            .arg(format!("{}", duration))
             .arg(output_path)
             .status()?;
 
@@ -198,12 +160,10 @@ impl Editor {
         let img_width = image.width() as i32;
         let img_height = image.height() as i32;
 
-        // OPTIMIZATION: Smaller font (42 -> 36) to encourage single line
-        let scale = PxScale::from(36.0);
-        let padding_x = 20; // Reduce padding to allow more text width
+        // OPTIMIZATION: Even smaller font (32.0) to ensure single line fit.
+        let scale = PxScale::from(32.0);
+        let padding_x = 20;
         let _padding_y = 20;
-        let max_text_width = (img_width - (padding_x * 2)).max(100);
-        let _padding_y = 20; // Removed unused variable underscore if not used
         let max_text_width = (img_width - (padding_x * 2)).max(100);
 
         // 1. Text Wrapping Logic
