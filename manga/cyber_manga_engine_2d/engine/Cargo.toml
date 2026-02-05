@@ -15,6 +15,9 @@ reqwest = { version = "0.11", features = ["blocking"] }
 flate2 = "1.0"
 tar = "0.4"
 msedge-tts = "0.3"
+rand = "0.8"
+rand_distr = "0.4"
+
 
 # AI 推理引擎 (Candle)
 candle-core = { version = "0.9.1", features = ["metal", "accelerate"] }

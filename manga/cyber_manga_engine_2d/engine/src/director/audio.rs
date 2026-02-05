@@ -46,6 +46,13 @@ impl SoundEngineer {
             let filename = format!("voice_{}.mp3", shot.id);
             let path = output_dir.join(filename);
 
+            if shot.dialogue.trim().is_empty() {
+                println!("🔇 Skipping audio for silent shot: {}", shot.panel_name);
+                shot.audio_path = None;
+                shot.duration = 3.0; // Default duration for silent panels
+                continue;
+            }
+
             self.record_voice(&shot.dialogue, target_voice, &path)
                 .await?;
 
@@ -72,12 +79,24 @@ impl SoundEngineer {
         let config = SpeechConfig::from(voice);
 
         // synthesize takes text and config
+        // synthesize takes text and config
+        println!(
+            "🎤 Synthesizing audio for: '{}' (Voice: {:?})",
+            text, voice.short_name
+        );
+
         let audio = client
             .synthesize(text, &config)
             .await
             .map_err(|e| Error::msg(format!("Failed to synthesize speech: {:?}", e)))?;
 
-        std::fs::write(output_path, audio.audio_bytes)?;
+        println!("✅ Synthesized {} bytes of audio", audio.audio_bytes.len());
+
+        if audio.audio_bytes.is_empty() {
+            return Err(Error::msg("Synthesized audio is empty!"));
+        }
+
+        std::fs::write(output_path, &audio.audio_bytes)?;
         Ok(())
     }
 

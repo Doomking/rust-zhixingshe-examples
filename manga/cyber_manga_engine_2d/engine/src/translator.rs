@@ -14,9 +14,9 @@ pub struct Translator {
 
 impl Translator {
     pub fn new(device: &Device) -> Result<Self> {
-        let models_dir = std::path::Path::new("models");
+        let models_dir = std::path::Path::new("models/marian");
         if !models_dir.exists() {
-            std::fs::create_dir(models_dir)?;
+            std::fs::create_dir_all(models_dir)?;
         }
 
         let endpoint =

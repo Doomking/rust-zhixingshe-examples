@@ -1,6 +1,7 @@
 mod director;
 mod manga;
 mod schedulers;
+mod script_ai; // Round 8: LLM-based script parser
 mod sd;
 mod translator;
 
@@ -81,7 +82,8 @@ async fn main() {
         }
     };
 
-    let director = match Director::new(sd.clone()) {
+    let director = match Director::new(sd.clone(), true) {
+        // true = AI parser (casual text), false = markdown parser
         Ok(d) => Arc::new(d),
         Err(e) => {
             tracing::error!("Failed to initialize Director: {}", e);
@@ -120,7 +122,7 @@ async fn generate_image(
     tracing::info!("Received image prompt: {}", payload.prompt);
 
     // 使用共享的 SD 实例生成图片
-    match state.sd.generate(&payload.prompt, 30, 7.5) {
+    match state.sd.generate(&payload.prompt, 30, 7.5, None) {
         Ok(image) => {
             // 将 DynamicImage 转换为 PNG 字节流
             let mut bytes: Vec<u8> = Vec::new();

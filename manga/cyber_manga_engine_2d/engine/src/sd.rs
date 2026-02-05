@@ -27,9 +27,9 @@ pub struct StableDiffusion {
 
 impl StableDiffusion {
     pub fn new(device: &Device) -> Result<Self> {
-        let models_dir = std::path::Path::new("models");
+        let models_dir = std::path::Path::new("models/sd-1.5");
         if !models_dir.exists() {
-            std::fs::create_dir(models_dir)?;
+            std::fs::create_dir_all(models_dir)?;
         }
 
         let files = vec![
@@ -172,6 +172,7 @@ impl StableDiffusion {
         original_prompt: &str,
         n_steps: usize,
         guidance_scale: f64,
+        seed: Option<u64>,
     ) -> Result<image::DynamicImage> {
         // 0. Neural Translation (Chinese -> English)
         let mut prompt = original_prompt.to_string();
@@ -209,8 +210,21 @@ impl StableDiffusion {
 
         // 2. 初始化潜在空间噪声 (Latent Noise Initialization) [1, 4, 64, 64]
         // Use F32
-        let latents =
-            Tensor::randn(0f32, 1f32, (1, 4, 64, 64), &self.device)?.to_dtype(DType::F32)?;
+        let latents = if let Some(s) = seed {
+            use rand::rngs::StdRng;
+            use rand::{Rng, SeedableRng};
+            println!("🌱 Generating latents with seed: {}", s);
+            let mut rng = StdRng::seed_from_u64(s);
+            let total_elements = 1 * 4 * 64 * 64;
+            let mut data = vec![0f32; total_elements];
+            // Fill with standard normal distribution
+            for x in data.iter_mut() {
+                *x = rng.sample(rand_distr::StandardNormal);
+            }
+            Tensor::from_vec(data, (1, 4, 64, 64), &self.device)?.to_dtype(DType::F32)?
+        } else {
+            Tensor::randn(0f32, 1f32, (1, 4, 64, 64), &self.device)?.to_dtype(DType::F32)?
+        };
 
         let mut scheduler = self.scheduler.clone();
         scheduler.set_timesteps(n_steps)?;

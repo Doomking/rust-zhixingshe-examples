@@ -133,7 +133,7 @@ impl MangaGenerator {
             );
 
             // Generate base image using the prompt
-            let mut image = self.sd.generate(&merged.prompt, 30, 7.5)?;
+            let mut image = self.sd.generate(&merged.prompt, 30, 7.5, None)?;
 
             // Render all speech bubbles for this merged panel
             for (idx, (role, dialogue)) in merged.dialogues.iter().enumerate() {

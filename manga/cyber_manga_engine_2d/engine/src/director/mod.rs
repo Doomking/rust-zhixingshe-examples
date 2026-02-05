@@ -16,11 +16,14 @@ pub struct Character {
 #[derive(Debug, Clone, Serialize)]
 pub struct Shot {
     pub id: usize,
-    pub character: String, // Who is speaking/acting?
-    pub dialogue: String,
+    pub panel_name: String, // e.g., "Panel 1: 宁静的开场"
+    pub character: String,  // Who is speaking/acting?
+    pub dialogue: String,   // Only actual dialogue (speech)
 
     // Director's instructions
-    pub visual_prompt: String, // Full prompt for SD
+    pub scene_description: String, // From script (画面描述)
+    pub background_prompt: String, // Used for seeding (Scene consistency)
+    pub visual_prompt: String,     // Full prompt for SD (combined)
     pub audio_path: Option<PathBuf>,
     pub image_paths: Vec<PathBuf>,
     pub video_path: Option<PathBuf>, // Path to the generated clip (image + audio + zoompan)
@@ -49,9 +52,12 @@ pub struct Director {
 }
 
 impl Director {
-    pub fn new(sd: std::sync::Arc<crate::sd::StableDiffusion>) -> anyhow::Result<Self> {
+    pub fn new(
+        sd: std::sync::Arc<crate::sd::StableDiffusion>,
+        use_ai_parser: bool,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
-            screenwriter: screenwriter::Screenwriter::new(),
+            screenwriter: screenwriter::Screenwriter::new(use_ai_parser)?,
             cinematographer: cinematographer::Cinematographer::new(sd),
             sound_engineer: audio::SoundEngineer::new(),
             editor: editor::Editor::new()?,

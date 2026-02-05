@@ -29,49 +29,98 @@ impl Editor {
         let mut clip_paths = Vec::new();
 
         for shot in &mut storyboard.shots {
-            // Check if audio exists and we have at least one image
-            if let (Some(audio_path), Some(img_path)) = (&shot.audio_path, shot.image_paths.first())
-            {
-                // 1. Process Keyframe (Resize + Subtitles)
-                let image = image::open(img_path)?;
+            // ROUND 9: Ensure we have images (Audio is now optional)
+            if !shot.image_paths.is_empty() {
+                let num_images = shot.image_paths.len();
+                let mut processed_paths = Vec::new();
 
-                // Resize to 720x1280 (Lanczos3)
-                let target_w = 720;
-                let target_h = 1280;
-                let mut bg_image =
-                    image.resize_to_fill(target_w, target_h, image::imageops::FilterType::Lanczos3);
+                // 1. Process all images (Resize + Subtitles)
+                for (idx, img_path) in shot.image_paths.iter().enumerate() {
+                    let image = image::open(img_path)?;
+                    let target_w = 720;
+                    let target_h = 1280;
+                    let mut bg_image = image.resize_to_fill(
+                        target_w,
+                        target_h,
+                        image::imageops::FilterType::Lanczos3,
+                    );
 
-                // Overlay Subtitles
-                // NEW STYLE: No Box, No Name, Outlined Text, Wider
-                self.render_subtitle(&mut bg_image, &shot.dialogue);
+                    // Overlay Subtitles on each image
+                    self.render_subtitle(&mut bg_image, &shot.dialogue);
 
-                let processed_path = output_dir.join(format!("processed_{}.png", shot.id));
-                bg_image.save(&processed_path)?;
+                    let processed_path =
+                        output_dir.join(format!("processed_{}_{}.png", shot.id, idx));
+                    bg_image.save(&processed_path)?;
+                    processed_paths.push(processed_path);
+                }
 
-                // 2. Generate Video Clip for this Shot
-                // Visual only clip with Smooth Zoom (Ken Burns)
+                // 2. Generate video clips for each image
+                let clip_duration = shot.duration / (num_images as f64);
+                let mut image_clips = Vec::new();
+
+                for (idx, img_path) in processed_paths.iter().enumerate() {
+                    let clip_path = output_dir.join(format!("img_clip_{}_{}.mp4", shot.id, idx));
+                    self.generate_visual_clip(img_path, &clip_path, clip_duration)?;
+                    image_clips.push(clip_path);
+                }
+
+                // 3. Crossfade between clips (if more than 1)
                 let shot_visual = output_dir.join(format!("shot_visual_{}.mp4", shot.id));
-                self.generate_visual_clip(&processed_path, &shot_visual, shot.duration)?;
 
-                // 3. Merge with Audio
+                if image_clips.len() == 1 {
+                    // Single image, just copy
+                    std::fs::copy(&image_clips[0], &shot_visual)?;
+                } else {
+                    // Multiple images: use xfade filter
+                    self.crossfade_clips(&image_clips, &shot_visual, clip_duration)?;
+                }
+
+                // 4. Merge with Audio OR Just Copy if Silent
                 let final_shot_clip = output_dir.join(format!("clip_{}.mp4", shot.id));
-                // -shortest to clip visual if audio is shorter (or vice versa, usually audio dictates)
-                let status2 = std::process::Command::new("ffmpeg")
-                    .arg("-y")
-                    .arg("-i")
-                    .arg(&shot_visual)
-                    .arg("-i")
-                    .arg(audio_path)
-                    .arg("-c:v")
-                    .arg("copy")
-                    .arg("-c:a")
-                    .arg("aac")
-                    .arg("-shortest") // Cut to shortest stream logic
-                    .arg(&final_shot_clip)
-                    .status()?;
 
-                if !status2.success() {
-                    return Err(Error::msg("Failed to merge audio"));
+                if let Some(audio_path) = &shot.audio_path {
+                    // Has audio: Merge
+                    let status = std::process::Command::new("ffmpeg")
+                        .arg("-y")
+                        .arg("-i")
+                        .arg(&shot_visual)
+                        .arg("-i")
+                        .arg(audio_path)
+                        .arg("-c:v")
+                        .arg("copy")
+                        .arg("-c:a")
+                        .arg("aac")
+                        .arg("-shortest")
+                        .arg(&final_shot_clip)
+                        .status()?;
+
+                    if !status.success() {
+                        return Err(Error::msg("Failed to merge audio"));
+                    }
+                } else {
+                    // Silent: Generate silent audio track so concat works
+                    // ffmpeg -f lavfi -i anullsrc=cl=mono:r=24000 -i shot_visual.mp4 -c:v copy -c:a aac -shortest final.mp4
+                    let status = std::process::Command::new("ffmpeg")
+                        .arg("-y")
+                        .arg("-f")
+                        .arg("lavfi")
+                        .arg("-i")
+                        .arg("anullsrc=channel_layout=mono:sample_rate=24000")
+                        .arg("-i")
+                        .arg(&shot_visual)
+                        .arg("-c:v")
+                        .arg("copy")
+                        .arg("-c:a")
+                        .arg("aac")
+                        .arg("-shortest")
+                        .arg(&final_shot_clip)
+                        .status()?;
+
+                    if !status.success() {
+                        // Fallback if lavfi fails: just copy (but this might break concat audio)
+                        println!("⚠️ Failed to add silent audio, falling back to video only");
+                        std::fs::copy(&shot_visual, &final_shot_clip)?;
+                    }
                 }
 
                 shot.video_path = Some(
@@ -124,13 +173,11 @@ impl Editor {
         output_path: &Path,
         duration: f64,
     ) -> Result<()> {
-        // Zoom/Pan for mobile
         let w = 720;
         let h = 1280;
 
-        // OPTIMIZATION: Smooth continuous zoom (Ken Burns)
-        // zoom+0.001 per frame @ 30fps = ~0.03 zoom per second.
-        // This eliminates jitter by using one image.
+        // ROUND 5: Very gentle zoom (0.0002/frame) for ultra-smooth effect
+        // At 30fps: ~0.006 zoom/second -> ~2.4% zoom over 4 seconds
         let status = std::process::Command::new("ffmpeg")
             .arg("-y")
             .arg("-loop")
@@ -138,7 +185,7 @@ impl Editor {
             .arg("-i")
             .arg(img_path)
             .arg("-vf")
-            .arg(format!("zoompan=z='min(zoom+0.001,1.5)':d={}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={}x{}:fps=30", (duration * 30.0) as i32, w, h))
+            .arg(format!("zoompan=z='min(zoom+0.0002,1.1)':d={}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={}x{}:fps=30", (duration * 30.0) as i32, w, h))
             .arg("-r")
             .arg("30")
             .arg("-c:v")
@@ -156,76 +203,121 @@ impl Editor {
         Ok(())
     }
 
+    fn crossfade_clips(
+        &self,
+        clips: &[std::path::PathBuf],
+        output: &Path,
+        clip_duration: f64,
+    ) -> Result<()> {
+        if clips.is_empty() {
+            return Err(Error::msg("No clips to crossfade"));
+        }
+        if clips.len() == 1 {
+            std::fs::copy(&clips[0], output)?;
+            return Ok(());
+        }
+
+        // Build FFmpeg xfade filter chain
+        let fade_duration = 0.5;
+        let mut filter_parts = Vec::new();
+        let mut offset = clip_duration - fade_duration;
+
+        for i in 0..(clips.len() - 1) {
+            if i == 0 {
+                // First transition: [0:v][1:v]xfade...[v0]
+                filter_parts.push(format!(
+                    "[0:v][1:v]xfade=transition=fade:duration={}:offset={}[v{}]",
+                    fade_duration, offset, i
+                ));
+            } else {
+                // Subsequent: [v{i-1}][{i+1}:v]xfade...[v{i}]
+                filter_parts.push(format!(
+                    "[v{}][{}:v]xfade=transition=fade:duration={}:offset={}[v{}]",
+                    i - 1,
+                    i + 1,
+                    fade_duration,
+                    offset,
+                    i
+                ));
+            }
+            offset += clip_duration - fade_duration;
+        }
+
+        let filter_complex = filter_parts.join(";");
+        let final_output_label = format!("[v{}]", clips.len() - 2);
+
+        let mut cmd = std::process::Command::new("ffmpeg");
+        cmd.arg("-y");
+
+        for clip in clips {
+            cmd.arg("-i").arg(clip);
+        }
+
+        cmd.arg("-filter_complex")
+            .arg(&filter_complex)
+            .arg("-map")
+            .arg(&final_output_label)
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-pix_fmt")
+            .arg("yuv420p")
+            .arg(output);
+
+        let status = cmd.status()?;
+        if !status.success() {
+            return Err(Error::msg("Failed to crossfade clips"));
+        }
+        Ok(())
+    }
+
     pub fn render_subtitle(&self, image: &mut DynamicImage, text: &str) {
         let img_width = image.width() as i32;
         let img_height = image.height() as i32;
 
-        // OPTIMIZATION: Even smaller font (32.0) to ensure single line fit.
-        let scale = PxScale::from(32.0);
-        let padding_x = 20;
-        let _padding_y = 20;
-        let max_text_width = (img_width - (padding_x * 2)).max(100);
+        // ROUND 5: Large centered subtitles (font 36)
+        let scale = PxScale::from(36.0);
+        let char_width = 22.0; // Adjusted for font 36
 
-        // 1. Text Wrapping Logic
-        let mut lines = Vec::new();
-        let mut current_line = String::new();
-        let char_width = 40.0; // Approx for larger font
+        // Calculate text width to center it
+        let text_width = (text.chars().count() as f32 * char_width) as i32;
+        let x_pos = ((img_width - text_width) / 2).max(20);
 
-        for char in text.chars() {
-            let current_width = (current_line.chars().count() as f32 * char_width) as i32;
-            if current_width + (char_width as i32) > max_text_width {
-                lines.push(current_line);
-                current_line = String::new();
-            }
-            current_line.push(char);
-        }
-        if !current_line.is_empty() {
-            lines.push(current_line);
-        }
+        // Position at 88% from top (lower for better visibility)
+        let y_pos = (img_height as f32 * 0.88) as i32;
 
-        // 2. Position: Bottom center
-        let line_height = 50;
-        let total_text_height = lines.len() as i32 * line_height;
-        let y_start = img_height - total_text_height - 100; // 100px from bottom
+        // Draw Text with thick outline for visibility
+        let offsets = [
+            (-3, -3),
+            (-3, 0),
+            (-3, 3),
+            (0, -3),
+            (0, 3),
+            (3, -3),
+            (3, 0),
+            (3, 3),
+        ];
 
-        // 3. Draw Text with Outline
-        for (i, line) in lines.iter().enumerate() {
-            let y_pos = y_start + (i as i32 * line_height);
-            let x_pos = padding_x;
-
-            // Simulate Stroke (Outline) - Draw black text at offsets
-            let offsets = [
-                (-2, -2),
-                (-2, 2),
-                (2, -2),
-                (2, 2),
-                (0, -2),
-                (0, 2),
-                (-2, 0),
-                (2, 0),
-            ];
-            for (ox, oy) in offsets {
-                draw_text_mut(
-                    image,
-                    Rgba([0u8, 0u8, 0u8, 255u8]), // Black
-                    x_pos + ox,
-                    y_pos + oy,
-                    scale,
-                    &self.font,
-                    line,
-                );
-            }
-
-            // Draw Inner White Text
+        for (ox, oy) in offsets {
             draw_text_mut(
                 image,
-                Rgba([255u8, 255u8, 255u8, 255u8]), // White
-                x_pos,
-                y_pos,
+                Rgba([0u8, 0u8, 0u8, 255u8]), // Black outline
+                x_pos + ox,
+                y_pos + oy,
                 scale,
                 &self.font,
-                line,
+                text,
             );
         }
+
+        // Draw white text
+        draw_text_mut(
+            image,
+            Rgba([255u8, 255u8, 255u8, 255u8]),
+            x_pos,
+            y_pos,
+            scale,
+            &self.font,
+            text,
+        );
     }
 }
