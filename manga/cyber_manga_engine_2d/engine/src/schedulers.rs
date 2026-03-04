@@ -70,9 +70,9 @@ impl SchedulerConfig for EulerDiscreteSchedulerConfig {
 
 #[derive(Debug, Clone)]
 pub struct EulerDiscreteScheduler {
-    timesteps: Vec<usize>,
-    sigmas: Vec<f64>,
-    init_noise_sigma: f64,
+    pub timesteps: Vec<usize>,
+    pub sigmas: Vec<f64>,
+    pub init_noise_sigma: f64,
     pub config: EulerDiscreteSchedulerConfig,
 }
 

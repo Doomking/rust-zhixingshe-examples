@@ -20,10 +20,9 @@ rand_distr = "0.4"
 
 
 # AI 推理引擎 (Candle)
-candle-core = { version = "0.9.1", features = ["metal", "accelerate"] }
-candle-transformers = "0.9.1"
-candle-nn = { version = "0.9.1", features = ["metal"] }
-hf-hub = "0.3.2"                                                        # 模型下载与缓存
+candle-core = { git = "https://github.com/huggingface/candle.git", features = ["metal", "accelerate"] }
+candle-transformers = { git = "https://github.com/huggingface/candle.git", features = ["metal"] }
+candle-nn = { git = "https://github.com/huggingface/candle.git", features = ["metal"] }
 tokenizers = { version = "0.19.1", features = ["http"] }                # 分词器
 
 # 图像处理与后期排版
@@ -33,6 +32,6 @@ ab_glyph = "0.2"   # 用于在图片上渲染中文字体 (imageproc compatible)
 
 # 日志与工具
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 anyhow = "1.0"
 dunce = "1.0.5"

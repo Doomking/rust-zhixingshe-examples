@@ -59,7 +59,12 @@ impl SoundEngineer {
             // Note: get_duration uses ffprobe, which works for mp3.
             let duration = self.get_duration(&path).unwrap_or(3.0);
             shot.duration = duration;
-            shot.audio_path = Some(path.canonicalize().unwrap_or(path));
+            shot.audio_path = Some(
+                path.canonicalize()
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string(),
+            );
         }
         Ok(())
     }

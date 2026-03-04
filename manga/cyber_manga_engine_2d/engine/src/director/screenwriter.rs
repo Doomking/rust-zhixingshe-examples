@@ -4,27 +4,28 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 pub struct Screenwriter {
-    script_ai: Option<ScriptAI>, // Optional LLM parser
+    use_ai: bool,
+    device: candle_core::Device,
 }
 
 impl Screenwriter {
-    pub fn new(use_ai: bool) -> Result<Self> {
-        let script_ai = if use_ai {
-            println!("🤖 Initializing AI Script Parser...");
-            Some(ScriptAI::new()?)
-        } else {
-            None
-        };
-
-        Ok(Self { script_ai })
+    pub fn new(device: &candle_core::Device, use_ai: bool) -> Result<Self> {
+        Ok(Self {
+            use_ai,
+            device: device.clone(),
+        })
     }
 
     pub fn write(&self, script_text: &str) -> Result<Storyboard> {
-        // If AI parser is available, use it for casual text
-        if let Some(ai) = &self.script_ai {
+        // If AI parser is enabled, instantiate it on demand, use it, then drop it
+        if self.use_ai {
+            println!("🤖 Initializing AI Script Parser (On-Demand)...");
+            // This scope ensures ScriptAI is dropped after use
+            let ai = ScriptAI::new(&self.device)?;
             println!("🤖 Using AI mode to parse casual text...");
             let panels = ai.parse_casual_text(script_text)?;
-            return self.panels_to_storyboard(panels);
+            return self.panels_to_storyboard(panels, Some(&ai));
+            // We pass &ai if we need translation features inside panels_to_storyboard
         }
 
         // Otherwise, parse as structured markdown
@@ -62,6 +63,7 @@ impl Screenwriter {
                         &current_scene_desc,
                         &current_dialogue_lines,
                         &current_character,
+                        None,
                     );
                 }
 
@@ -138,6 +140,7 @@ impl Screenwriter {
                 &current_scene_desc,
                 &current_dialogue_lines,
                 &current_character,
+                None,
             );
         }
 
@@ -151,7 +154,11 @@ impl Screenwriter {
     }
 
     /// Convert AI-parsed panels to storyboard
-    fn panels_to_storyboard(&self, panels: Vec<crate::script_ai::Panel>) -> Result<Storyboard> {
+    fn panels_to_storyboard(
+        &self,
+        panels: Vec<crate::script_ai::Panel>,
+        ai: Option<&ScriptAI>,
+    ) -> Result<Storyboard> {
         let mut shots = Vec::new();
         let mut characters = HashMap::new();
 
@@ -198,18 +205,84 @@ impl Screenwriter {
             }
 
             // Create shot
+
+            // Use sd_prompt directly if LLM provided English SD tags
+            let visual_prompt = if let Some(ref sd_prompt) = panel.sd_prompt {
+                // LLM already generated English SD prompt - use directly!
+                println!("✅ Using LLM-generated SD prompt: {}", sd_prompt);
+                sd_prompt.clone()
+            } else {
+                // Fallback: translate Chinese descriptions to English
+                println!("🔄 No sd_prompt, falling back to translation...");
+
+                let background_prompt = if let Some(parser) = ai {
+                    if panel.background_visual.chars().any(|c| !c.is_ascii()) {
+                        println!("🔄 Translating scene description...");
+                        match parser.translate(panel.background_visual.trim()) {
+                            Ok(en) => {
+                                println!("✅ Translated: {}", en);
+                                en
+                            }
+                            Err(e) => {
+                                println!("⚠️ Translation failed: {}", e);
+                                panel.background_visual.clone()
+                            }
+                        }
+                    } else {
+                        panel.background_visual.clone()
+                    }
+                } else {
+                    panel.background_visual.clone()
+                };
+
+                let character_prompt = if let Some(parser) = ai {
+                    if panel.character_visual.chars().any(|c| !c.is_ascii()) {
+                        println!("🔄 Translating character description...");
+                        match parser.translate(panel.character_visual.trim()) {
+                            Ok(en) => {
+                                println!("✅ Translated character: {}", en);
+                                en
+                            }
+                            Err(e) => {
+                                println!("⚠️ Character translation failed: {}", e);
+                                "1girl, anime, detailed face, expressive eyes".to_string()
+                            }
+                        }
+                    } else {
+                        panel.character_visual.clone()
+                    }
+                } else {
+                    panel.character_visual.clone()
+                };
+
+                format!("{}, {}", background_prompt, character_prompt)
+            };
+
+            let background_prompt = if panel.sd_prompt.is_some() {
+                // When using sd_prompt, background_prompt is just for reference
+                panel.background_visual.clone()
+            } else {
+                visual_prompt
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            };
+
             let shot = Shot {
                 id: idx,
                 panel_name: format!("Panel {}", idx + 1),
+                action: String::new(),
                 character: speaker,
                 dialogue: combined_dialogue,
                 scene_description: panel.background_visual.clone(),
-                background_prompt: panel.background_visual.clone(),
-                visual_prompt: format!("{}, {}", panel.background_visual, panel.character_visual),
+                background_prompt,
+                visual_prompt,
                 audio_path: None,
                 image_paths: Vec::new(),
                 video_path: None,
-                duration: 0.0, // Will be calculated later
+                duration: 0.0,
             };
 
             shots.push(shot);
@@ -237,6 +310,7 @@ impl Screenwriter {
         scene_desc: &str,
         dialogue_lines: &[String],
         character_name: &str,
+        ai: Option<&ScriptAI>,
     ) {
         if dialogue_lines.is_empty() && scene_desc.is_empty() {
             return; // Skip empty panels
@@ -264,14 +338,37 @@ impl Screenwriter {
             characters.insert(character_name.to_string(), character);
         }
 
+        // Translate scene description if AI is available
+        let background_prompt = if let Some(parser) = ai {
+            // Only translate if it looks like Chinese (simple heuristic: contains non-ascii)
+            if scene_desc.chars().any(|c| !c.is_ascii()) {
+                println!("🔄 Translating scene description...");
+                match parser.translate(scene_desc.trim()) {
+                    Ok(en) => {
+                        println!("✅ Translated: {}", en);
+                        en
+                    }
+                    Err(e) => {
+                        println!("⚠️ Translation failed: {}", e);
+                        scene_desc.trim().to_string()
+                    }
+                }
+            } else {
+                scene_desc.trim().to_string()
+            }
+        } else {
+            scene_desc.trim().to_string()
+        };
+
         let shot = Shot {
             id: *shot_id,
             panel_name: panel_name.to_string(),
             character: character_name.to_string(),
+            action: String::new(), // Initialized as empty
             dialogue: combined_dialogue,
             scene_description: scene_desc.trim().to_string(),
-            background_prompt: scene_desc.trim().to_string(), // Use scene desc as background prompt
-            visual_prompt: String::new(),                     // Will be filled by Cinematographer
+            background_prompt: background_prompt, // Use translated prompt
+            visual_prompt: String::new(),         // Will be filled by Cinematographer
             audio_path: None,
             image_paths: Vec::new(),
             video_path: None,
