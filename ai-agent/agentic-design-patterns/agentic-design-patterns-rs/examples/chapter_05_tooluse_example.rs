@@ -63,34 +63,69 @@ impl Tool for WeatherTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        println!("\n--- 🛠️ Tool Called: get_weather for location: '{}' ---", args.location);
-        
+        println!(
+            "\n--- 🛠️ Tool Called: get_weather for location: '{}' ---",
+            args.location
+        );
+
         // 1. Get coordinates using geocoding API
-        let geo_url = format!("https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=en&format=json", args.location);
-        let geo_res = reqwest::get(&geo_url).await.map_err(|_| ToolError("Failed to fetch geo data".to_string()))?;
-        let geo_json: serde_json::Value = geo_res.json().await.map_err(|_| ToolError("Failed to parse geo JSON".to_string()))?;
+        let geo_url = format!(
+            "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=en&format=json",
+            args.location
+        );
+        let geo_res = reqwest::get(&geo_url)
+            .await
+            .map_err(|_| ToolError("Failed to fetch geo data".to_string()))?;
+        let geo_json: serde_json::Value = geo_res
+            .json()
+            .await
+            .map_err(|_| ToolError("Failed to parse geo JSON".to_string()))?;
 
         if let Some(results) = geo_json.get("results").and_then(|r| r.as_array()) {
             if let Some(first) = results.first() {
-                let lat = first.get("latitude").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let lon = first.get("longitude").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let name = first.get("name").and_then(|v| v.as_str()).unwrap_or(&args.location);
+                let lat = first
+                    .get("latitude")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let lon = first
+                    .get("longitude")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let name = first
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&args.location);
 
                 // 2. Get weather
-                let req_url = format!("https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current_weather=true", lat, lon);
-                let weather_res = reqwest::get(&req_url).await.map_err(|_| ToolError("Failed to fetch weather data".to_string()))?;
-                let weather_json: serde_json::Value = weather_res.json().await.map_err(|_| ToolError("Failed to parse weather JSON".to_string()))?;
+                let req_url = format!(
+                    "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current_weather=true",
+                    lat, lon
+                );
+                let weather_res = reqwest::get(&req_url)
+                    .await
+                    .map_err(|_| ToolError("Failed to fetch weather data".to_string()))?;
+                let weather_json: serde_json::Value = weather_res
+                    .json()
+                    .await
+                    .map_err(|_| ToolError("Failed to parse weather JSON".to_string()))?;
 
                 if let Some(current) = weather_json.get("current_weather") {
-                    let temp = current.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let wind = current.get("windspeed").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let str_result = format!("Weather in {}: {}°C, wind speed {} km/h", name, temp, wind);
+                    let temp = current
+                        .get("temperature")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let wind = current
+                        .get("windspeed")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let str_result =
+                        format!("Weather in {}: {}°C, wind speed {} km/h", name, temp, wind);
                     println!("--- TOOL RESULT: {} ---", str_result);
                     return Ok(str_result);
                 }
             }
         }
-        
+
         let fallback = format!("Could not find weather for {}", args.location);
         println!("--- TOOL RESULT: {} ---", fallback);
         Ok(fallback)
@@ -131,15 +166,18 @@ impl Tool for CapitalTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        println!("\n--- 🛠️ Tool Called: get_capital for country: '{}' ---", args.country);
-        
+        println!(
+            "\n--- 🛠️ Tool Called: get_capital for country: '{}' ---",
+            args.country
+        );
+
         let result = match args.country.to_lowercase().as_str() {
             "france" => "The capital of France is Paris.",
             "japan" => "The capital of Japan is Tokyo.",
             "china" => "The capital of China is Beijing.",
             _ => "I do not have the capital information for that country in my current database.",
         };
-        
+
         println!("--- TOOL RESULT: {} ---", result);
         Ok(result.to_string())
     }
@@ -179,14 +217,19 @@ impl Tool for GeneralInfoTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        println!("\n--- 🛠️ Tool Called: get_general_info for topic: '{}' ---", args.topic);
-        
+        println!(
+            "\n--- 🛠️ Tool Called: get_general_info for topic: '{}' ---",
+            args.topic
+        );
+
         let result = match args.topic.to_lowercase().as_str() {
-            "population of earth" => "The estimated population of Earth is around 8 billion people.",
+            "population of earth" => {
+                "The estimated population of Earth is around 8 billion people."
+            }
             "tallest mountain" => "Mount Everest is the tallest mountain above sea level.",
             _ => "No specific information found, but the topic seems interesting.",
         };
-        
+
         println!("--- TOOL RESULT: {} ---", result);
         Ok(result.to_string())
     }
@@ -203,9 +246,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Create the agent equipped with all three tools
     let agent = client
         .agent("qwen2.5:14b")
-        .preamble("You are a helpful assistant capable of using multiple tools to answer questions. \
+        .preamble(
+            "You are a helpful assistant capable of using multiple tools to answer questions. \
                    When a tool provides a result, use it to answer the user's question accurately. \
-                   If a tool result says that information is unavailable, inform the user.")
+                   If a tool result says that information is unavailable, inform the user.",
+        )
         .tool(WeatherTool)
         .tool(CapitalTool)
         .tool(GeneralInfoTool)
@@ -220,7 +265,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     for query in queries {
         println!("\n--- 🏃 Running Agent with Query: '{}' ---", query);
-        
+
         match agent.prompt(query).await {
             Ok(response) => {
                 println!("\n--- ✅ Final Agent Response ---");

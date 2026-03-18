@@ -18,7 +18,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mode = args.get(1).unwrap_or(&default_mode).to_lowercase();
 
     if mode != "parallel" && mode != "serial" {
-        println!("用法: cargo run --example chapter_03_parallelization_example -- [parallel|serial]");
+        println!(
+            "用法: cargo run --example chapter_03_parallelization_example -- [parallel|serial]"
+        );
         println!("默认模式: parallel");
         return Ok(());
     }
@@ -59,29 +61,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prompt(terms_agent),
                 passthrough()
             ))
-            .map(|(summary, questions, terms, topic): (Result<String, rig::completion::PromptError>, Result<String, rig::completion::PromptError>, Result<String, rig::completion::PromptError>, String)| {
-                let sum_str = summary.unwrap();
-                let q_str = questions.unwrap();
-                let t_str = terms.unwrap();
+            .map(
+                |(summary, questions, terms, topic): (
+                    Result<String, rig::completion::PromptError>,
+                    Result<String, rig::completion::PromptError>,
+                    Result<String, rig::completion::PromptError>,
+                    String,
+                )| {
+                    let sum_str = summary.unwrap();
+                    let q_str = questions.unwrap();
+                    let t_str = terms.unwrap();
 
-                println!("--- [阶段 1] 并行任务完成 ---");
-                println!(">> 摘要 (Summary):");
-                println!("{}\n", sum_str);
-                println!(">> 问题 (Questions):");
-                println!("{}\n", q_str);
-                println!(">> 关键词 (Key Terms):");
-                println!("{}\n", t_str);
-                println!("--- [阶段 2] 开始综合生成最终回复 ---\n");
+                    println!("--- [阶段 1] 并行任务完成 ---");
+                    println!(">> 摘要 (Summary):");
+                    println!("{}\n", sum_str);
+                    println!(">> 问题 (Questions):");
+                    println!("{}\n", q_str);
+                    println!(">> 关键词 (Key Terms):");
+                    println!("{}\n", t_str);
+                    println!("--- [阶段 2] 开始综合生成最终回复 ---\n");
 
-                format!(
-                    "Based on the following information:\n\
+                    format!(
+                        "Based on the following information:\n\
                      Summary: {}\n\
                      Related Questions: {}\n\
                      Key Terms: {}\n\
                      Synthesize a comprehensive answer for the Original topic: {}",
-                    sum_str, q_str, t_str, topic
-                )
-            })
+                        sum_str, q_str, t_str, topic
+                    )
+                },
+            )
             .chain(prompt(synthesis_agent));
 
         println!("\n=======================================================");
@@ -98,7 +107,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", response_parallel);
         println!("--- 并行执行耗时: {:.2?} ---", duration_parallel);
         println!("=======================================================\n");
-
     } else if mode == "serial" {
         // --- 运行串行版本 ---
         println!("\n=======================================================");
