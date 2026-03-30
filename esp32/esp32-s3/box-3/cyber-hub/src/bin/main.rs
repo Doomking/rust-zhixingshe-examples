@@ -6,24 +6,21 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use core::str::FromStr;
-use defmt::{error, info, warn};           // Defmt 是一个专门为嵌入式系统设计的极度轻量级日志框架
+use defmt::info;           // Defmt 是一个专门为嵌入式系统设计的极度轻量级日志框架
 use embassy_executor::Spawner;            // Embassy 异步执行器的任务生成器
-use embassy_net::tcp::TcpSocket;          // Embassy 的 TCP Socket 实现
-use embassy_net::{Config, Stack};         // Embassy 网络协议栈配置和核心栈对象
-use embassy_net::StackResources;          // 预分配给网络栈的内存资源（存放 Socket 等）
+use embassy_net::{Config, StackResources};         // Embassy 网络协议栈配置和核心栈对象
 use embassy_time::{Duration, Timer};      // Embassy 的异步定时器依赖
 use esp_hal::clock::CpuClock;             // ESP-HAL 时钟配置
 use esp_hal::rng::Rng;                    // 硬件随机数发生器
 use esp_hal::timer::timg::TimerGroup;     // 硬件定时器外设，用于驱动系统的异步时钟
-use esp_radio::wifi::{ClientConfig, ModeConfig, WifiController, WifiEvent, WifiDevice}; // 控制 Wi-Fi 硬件的模块
 
-// 恐慌处理 (Panic Handler)：当程序发生严重错误崩溃时，调用此函数
-// 在嵌入式里通常是写死一个死循环，或者重启设备
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
+// 从外部模块引入刚刚重构好的三大网络任务
+use cyber_hub::wifi::{wifi_task, net_task};
+use cyber_hub::tcp::tcp_client_task;
+use cyber_hub::display::draw_cyber_hub_ui;
+use cyber_hub::imu::imu_task;
+
+use esp_backtrace as _; // 引入官方的无敌堆栈回溯与 Panic 处理工具
 
 // 引入全局内存分配器（因为 no_std 没有 std，所以需要手动引入 alloc 库才能使用 Box/String/Vec）
 extern crate alloc;
@@ -41,109 +38,7 @@ macro_rules! mk_static {
     }};
 }
 
-// ------------------------------------------------------------------------------------------------ //
-// [后台任务 1]: 管理 Embassy 的底层协议栈
-// 这是一个独立的异步任务，不断推进 TCP/IP 状态机的数据收发
-// ------------------------------------------------------------------------------------------------ //
-#[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, WifiDevice<'static>>) {
-    runner.run().await
-}
-
-// ------------------------------------------------------------------------------------------------ //
-// [后台任务 2]: TCP 客户端任务，负责和 Mac 上的 Server 建立 TCP 连接
-// ------------------------------------------------------------------------------------------------ //
-#[embassy_executor::task]
-async fn tcp_client_task(stack: Stack<'static>) {
-    // 预先给 Socket 分配 RX 和 TX 的缓冲区（内存）
-    let mut rx_buffer = [0; 1024];
-    let mut tx_buffer = [0; 1024];
-
-    loop {
-        // 如果物理链路没连上，或者 DHCP 还没获取到 IP，就先等待 500ms
-        if !stack.is_link_up() || !stack.is_config_up() {
-            Timer::after(Duration::from_millis(500)).await;
-            continue;
-        }
-
-        // 创建 TCP Socket 并绑定到当前的协议栈
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(Duration::from_secs(10))); // 设置超市时间 10秒
-
-        // 将环境变量编译时传进来的 MAC_IP 解析为真正的 Ipv4 地址结构
-        let mac_ip = embassy_net::Ipv4Address::from_str(env!("MAC_IP")).expect("Invalid MAC_IP");
-        let endpoint = embassy_net::IpEndpoint::new(embassy_net::IpAddress::Ipv4(mac_ip), 8080);
-        
-        info!("Connecting to TCP server at {}...", env!("MAC_IP"));
-        
-        // 发起异步连接（这行代码会挂起让出 CPU，直到网络连接成功或者失败）
-        if let Err(e) = socket.connect(endpoint).await {
-            warn!("TCP connect error: {:?}", defmt::Debug2Format(&e));
-            Timer::after(Duration::from_secs(2)).await; // 连接失败就等 2 秒后重启大循环重试
-            continue;
-        }
-
-        info!("TCP connected to Mac!");
-        
-        // 连上之后，往 Mac 发送一条 Hello Mac 数据
-        let msg = b"Hello Mac from Cyber-Hub!";
-        if let Err(e) = socket.write(msg).await {
-            warn!("TCP write error: {:?}", defmt::Debug2Format(&e));
-        } else {
-            info!("Sent Hello Mac!");
-        }
-
-        // 发送完毕可以主动关闭 socket，也可以进入自己的收发循环。这里因为是测试，发完我们就关闭。
-        socket.close();
-        Timer::after(Duration::from_secs(5)).await;
-    }
-}
-
-// ------------------------------------------------------------------------------------------------ //
-// [后台任务 3]: Wi-Fi 状态管理机任务，专门负责连上路由器，并在断线时自动重连
-// ------------------------------------------------------------------------------------------------ //
-#[embassy_executor::task]
-async fn wifi_task(mut controller: WifiController<'static>) {
-    info!("Starting wifi task...");
-    
-    // 初始化客户端的配置（账号密码）
-    // 这里用 env!() 宏读取编译时传入的环境变量，避免把密码明文写在代码中
-    let client_config = ModeConfig::Client(
-        ClientConfig::default()
-            .with_ssid(alloc::string::String::from(env!("WIFI_SSID")))
-            .with_password(alloc::string::String::from(env!("WIFI_PASS")))
-    );
-    
-    // 下发配置到硬件
-    controller.set_config(&client_config).expect("Failed to set configuration");
-
-    // 启动 Wi-Fi 硬件
-    match controller.start_async().await {
-        Ok(_) => info!("Wifi started!"),
-        Err(e) => {
-            error!("Failed to start wifi: {:?}", defmt::Debug2Format(&e));
-            return;
-        }
-    }
-
-    loop {
-        info!("Connecting to WiFi...");
-        // 尝试连接并挂起等待结果
-        match controller.connect_async().await {
-            Ok(_) => info!("Wifi connected!"),
-            Err(e) => {
-                error!("Failed to connect: {:?}", defmt::Debug2Format(&e));
-                Timer::after(Duration::from_millis(5000)).await;
-                continue; // 重新大循环，也就是每 5 秒重试连接一遍
-            }
-        }
-
-        // 挂起等待硬件抛出 [WifiEvent::StaDisconnected] 事件 (一旦抛出说明掉线了)
-        controller.wait_for_event(WifiEvent::StaDisconnected).await;
-        info!("WiFi disconnected. Reconnecting...");
-        // 循环继续，自动走上一步的断线重连逻辑
-    }
-}
+// (原有的网络与 Wi-Fi 任务已经被移动到了 src/wifi.rs 和 src/tcp.rs)
 
 // ------------------------------------------------------------------------------------------------ //
 // ✈️ 飞行起点：主函数入口
@@ -198,12 +93,104 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     // ------------------------------------------------------------------- //
+    // SPI 屏幕物理驱动初始化 (Phase 2)
+    // ------------------------------------------------------------------- //
+    use esp_hal::spi::master::Spi;
+    use esp_hal::gpio::{Level, Output, OutputConfig};
+    
+    let sck = peripherals.GPIO7;
+    let mosi = peripherals.GPIO6;
+    let dc = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
+    let cs = Output::new(peripherals.GPIO5, Level::High, OutputConfig::default()); // 软件 CS，保证整块传输期间 CS 不抖动
+    // ILI9342C on BOX-3: reset_active_high=1 - we manage reset manually
+    let mut rst = Output::new(peripherals.GPIO48, Level::High, OutputConfig::default());
+    let mut backlight = Output::new(peripherals.GPIO47, Level::Low, OutputConfig::default());
+    
+    info!("Initializing SPI Display...");
+    let spi_config = esp_hal::spi::master::Config::default()
+        .with_frequency(esp_hal::time::Rate::from_mhz(40))
+        .with_mode(esp_hal::spi::Mode::_0);
+        
+    let spi = Spi::new(peripherals.SPI2, spi_config)
+        .expect("SPI Init")
+        .with_sck(sck)
+        .with_mosi(mosi);
+
+    // 自定义了一个带 FIFO 分块保护的 SPI 包装器
+    struct ChunkedSpiBus<B>(B);
+    impl<B: embedded_hal::spi::ErrorType> embedded_hal::spi::ErrorType for ChunkedSpiBus<B> {
+        type Error = B::Error;
+    }
+    impl<B: embedded_hal::spi::SpiBus<u8>> embedded_hal::spi::SpiBus<u8> for ChunkedSpiBus<B> {
+        fn read(&mut self, words: &mut [u8]) -> Result<(), B::Error> { self.0.read(words) }
+        fn write(&mut self, words: &[u8]) -> Result<(), B::Error> {
+            for chunk in words.chunks(60) {
+                self.0.write(chunk)?;
+            }
+            Ok(())
+        }
+        fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), B::Error> { self.0.transfer(read, write) }
+        fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), B::Error> { self.0.transfer_in_place(words) }
+        fn flush(&mut self) -> Result<(), B::Error> { self.0.flush() }
+    }
+
+    let spi_device = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(ChunkedSpiBus(spi), cs).expect("SPI");
+    let di = display_interface_spi::SPIInterface::new(spi_device, dc);
+
+    let mut delay = esp_hal::delay::Delay::new();
+
+    // 手动执行 Active-HIGH Reset序列: HIGH(复位) -> 延时 -> LOW(释放)
+    rst.set_high(); // 触发复位
+    delay.delay_millis(20u32);
+    rst.set_low();  // 释放复位，进入正常工作模式
+    delay.delay_millis(150u32); // 等待 ILI9342C 内部初始化完成
+
+    info!("Initializing ILI9342C SPI Display...");
+    let builder = mipidsi::Builder::new(mipidsi::models::ILI9342CRgb565, di)
+        .orientation(mipidsi::options::Orientation::new().rotate(mipidsi::options::Rotation::Deg180));
+    // 注意：不使用 .reset_pin()，因为 mipidsi 假设 active-LOW reset，对 BOX-3 是反的
+        
+    info!("Builder configured. Calling init()...");
+    let mut display = match builder.init(&mut delay) {
+        Ok(d) => {
+            info!("Mipidsi display init successful!");
+            d
+        },
+        Err(e) => {
+            defmt::error!("FATAL: Display init failed with error!");
+            panic!("Display init error");
+        }
+    };
+    
+    // 点亮背光
+    backlight.set_high();
+
+    // 正式 UI
+    draw_cyber_hub_ui(&mut display, "INIT: Wait for DHCP...").expect("Failed to draw CyberHub UI");
+
+    // ------------------------------------------------------------------- //
+    // I2C 陀螺仪驱动初始化 (Phase 2)
+    // ------------------------------------------------------------------- //
+    use esp_hal::i2c::master::I2c;
+    use icm42670::{Icm42670, Address};
+    
+    info!("Initializing I2C IMU...");
+    let i2c = I2c::new(peripherals.I2C0, esp_hal::i2c::master::Config::default())
+        .expect("I2C Init")
+        .with_sda(peripherals.GPIO8)
+        .with_scl(peripherals.GPIO18);
+    
+    // 初始化 6轴传感器 ICM42607-P
+    let imu = Icm42670::new(i2c, Address::Primary).expect("Failed to init IMU");
+
+    // ------------------------------------------------------------------- //
     // 任务派发 (Spawning)
     // ------------------------------------------------------------------- //
     // 我们将把写好的各个独立子系统变成并发的后台任务全部“扔”给调度系统运行。
     spawner.spawn(net_task(runner)).unwrap();
     spawner.spawn(wifi_task(wifi_controller)).unwrap();
     spawner.spawn(tcp_client_task(stack)).unwrap();
+    spawner.spawn(imu_task(imu)).unwrap();
 
     info!("Waiting for DHCP config...");
     
@@ -212,6 +199,7 @@ async fn main(spawner: Spawner) -> ! {
         if stack.is_config_up() {
             if let Some(config) = stack.config_v4() {
                 info!("IP address: {:?}", defmt::Debug2Format(&config.address));
+                draw_cyber_hub_ui(&mut display, "STATUS: TCP CONNECTED").ok();
                 break;
             }
         }
