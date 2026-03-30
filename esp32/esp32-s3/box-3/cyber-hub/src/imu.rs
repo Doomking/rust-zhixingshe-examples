@@ -6,29 +6,54 @@ use icm42670::Icm42670;
 #[embassy_executor::task]
 pub async fn imu_task(mut imu: Icm42670<esp_hal::i2c::master::I2c<'static, esp_hal::Blocking>>) {
     info!("Starting IMU task...");
+
+    let mut tick = 0u32;
+    // is_upright = 设备已明确处于直立/正放状态，准备好检测下一次翻转
+    let mut is_upright = false;
     
-    let mut was_flipped = false;
-    let mut tick = 0;
-    
-    // Poll the accelerometer for Z-axis flips
+    // 简单的滤波/防抖计数
+    let mut upright_count = 0u8;
+    let mut flip_count = 0u8;
+
     loop {
         if let Ok(accel) = imu.accel_norm() {
-            // 每隔 10 次循环 (1秒) 打印一次当前的 Z 轴加速度，方便调试芯片实际的安装方向
             if tick % 10 == 0 {
-                info!("IMU Axes: X={}, Y={}, Z={}", accel.x, accel.y, accel.z);
+                info!("IMU Z={} | upright={}", accel.z, is_upright);
             }
             tick += 1;
 
-            let is_flipped = accel.z > 0.3;
+            let z = accel.z;
 
-            // 只要是从“非趴下”变成了“趴下”，就立刻触发锁屏（不用管之前是躺着还是立着）
-            if is_flipped && !was_flipped {
-                info!("Box Flipped! Face down detected! Triggering lock_screen...");
-                let _ = crate::FLIP_EVENT_CHANNEL.try_send(true);
+            // 直立检测 (需要连续 3 次判定才生效)
+            if z < -0.2 {
+                if !is_upright {
+                    upright_count += 1;
+                    if upright_count >= 3 {
+                        info!("Device confirmed UPRIGHT. Ready to detect flip.");
+                        is_upright = true;
+                        upright_count = 0;
+                    }
+                }
+                flip_count = 0;
+            } 
+            // 趴下检测 (需要连续 3 次判定 + 之前必须是直立状态)
+            else if z > 0.3 {
+                if is_upright {
+                    flip_count += 1;
+                    if flip_count >= 3 {
+                        info!("FLIP CONFIRMED! Z={} Sending lock_screen...", z);
+                        let _ = crate::FLIP_EVENT_CHANNEL.try_send(true);
+                        is_upright = false; // 必须再次确认直立才能再次触发
+                        flip_count = 0;
+                    }
+                }
+                upright_count = 0;
+            } else {
+                // 中间地带，清零即时计数，但维持 is_upright 状态
+                upright_count = 0;
+                flip_count = 0;
             }
-            
-            was_flipped = is_flipped;
         }
-        Timer::after(Duration::from_millis(100)).await;
+        Timer::after(Duration::from_millis(50)).await; // 提高采样频率到 20Hz 以配合 3 次判定的防抖
     }
 }
