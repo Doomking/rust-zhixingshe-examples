@@ -108,6 +108,10 @@ async fn main(spawner: Spawner) -> ! {
     let mut rst = Output::new(peripherals.GPIO48, Level::High, OutputConfig::default());
     let mut backlight = Output::new(peripherals.GPIO47, Level::Low, OutputConfig::default());
 
+    // 👇 【只需要加上这极其致命的一行代码！】👇
+    // 强行拉高 PA_CTRL (GPIO46)，为底层的 Mute 缓冲芯片和音频放大器接通物理电源！
+    let _pa_ctrl = Output::new(peripherals.GPIO46, Level::High, OutputConfig::default());
+
     info!("Initializing SPI Display...");
     let spi_config = esp_hal::spi::master::Config::default()
         .with_frequency(esp_hal::time::Rate::from_mhz(40))
@@ -183,7 +187,7 @@ async fn main(spawner: Spawner) -> ! {
     // ------------------------------------------------------------------- //
     // I2S & DMA 手动分配 (Fix Phase 3 Panic: OutOfDescriptors)
     // ------------------------------------------------------------------- //
-    use esp_hal::i2s::master::{Config as I2sConfig, DataFormat, I2s};
+    use esp_hal::i2s::master::{Config as I2sConfig, DataFormat, I2s}; // 确保顶部引入了这个
 
     let dma_channel = peripherals.DMA_CH0;
     let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
@@ -204,6 +208,8 @@ async fn main(spawner: Spawner) -> ! {
 
     let i2s_rx = i2s
         .i2s_rx
+        .with_bclk(peripherals.GPIO17)
+        .with_ws(peripherals.GPIO45)
         .with_din(peripherals.GPIO16)
         .build(rx_descriptors);
 
@@ -211,8 +217,6 @@ async fn main(spawner: Spawner) -> ! {
     // 给 TX 一个物理排气口，防止 TX 阻塞拖死全局 I2S 时钟。
     let i2s_tx = i2s
         .i2s_tx
-        .with_bclk(peripherals.GPIO17)
-        .with_ws(peripherals.GPIO45)
         .with_dout(peripherals.GPIO15)
         .build(tx_descriptors);
 

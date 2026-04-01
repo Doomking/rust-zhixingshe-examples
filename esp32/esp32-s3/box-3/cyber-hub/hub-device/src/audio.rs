@@ -20,39 +20,51 @@ impl<'a> Es7210<'a> {
     }
 
     pub async fn init(&mut self) -> Result<(), ()> {
-        info!("Initializing ES7210 ADC (I2C)...");
+        info!("Initializing ES7210 ADC (I2C) with ABSOLUTE FINAL TRUTH...");
 
-        // 1. Reset
+        // 1. 强制复位
         self.write_reg(0x00, 0xFF)?;
-        Timer::after(Duration::from_millis(10)).await;
+        Timer::after(Duration::from_millis(50)).await;
+        self.write_reg(0x00, 0x41)?; // 解除复位
 
-        // 2. Power & Clock Setup
-        self.write_reg(0x01, 0x20)?;
-        self.write_reg(0x09, 0x30)?;
-        self.write_reg(0x0a, 0x30)?;
+        // 2. 供电与核心时钟树
+        // 【真相大白】：0x00 才是真正的“全功率开启”！(0 代表不 Power Down)
+        self.write_reg(0x01, 0x00)?;
 
-        // 3. I2S Config (16-bit, 16kHz based on 12.288MHz MCLK)
-        self.write_reg(0x11, 0x60)?; // 16-bit I2S Mode
-        self.write_reg(0x07, 0x20)?; // OSR = 128
-        self.write_reg(0x02, 0xC3)?; // Clock Div
-        self.write_reg(0x04, 0x03)?; // LRCK Divider High (16kHz)
-        self.write_reg(0x05, 0x00)?; // LRCK Divider Low
+        self.write_reg(0x02, 0x00)?;
+        self.write_reg(0x03, 0x20)?; // ADC OSR
+        self.write_reg(0x04, 0x01)?;
+        self.write_reg(0x05, 0x00)?;
+        self.write_reg(0x06, 0x03)?; // MCLK 分频
+        self.write_reg(0x07, 0x00)?;
+        self.write_reg(0x08, 0x00)?; // 设为 Slave 模式
+        self.write_reg(0x09, 0x30)?; // 锁相环时序
+        self.write_reg(0x0A, 0x30)?;
+        self.write_reg(0x0B, 0x00)?;
+        self.write_reg(0x0C, 0x00)?;
 
-        // 4. Analog & MIC Config
-        self.write_reg(0x40, 0xC3)?; // Analog power
-        self.write_reg(0x41, 0x70)?; // MIC Bias
+        // 3. 数据格式
+        self.write_reg(0x11, 0x60)?; // 16-bit, 标准 I2S
+        self.write_reg(0x12, 0x02)?;
+
+        // 4. 麦克风偏置供电
+        self.write_reg(0x40, 0x42)?;
+        self.write_reg(0x41, 0x70)?;
         self.write_reg(0x42, 0x70)?;
-        self.write_reg(0x43, 0x1E)?; // MIC1 Gain (+24dB)
-        self.write_reg(0x44, 0x1E)?; // MIC2 Gain (+24dB)
-        self.write_reg(0x47, 0x08)?; // MIC1 Power up
-        self.write_reg(0x48, 0x08)?; // MIC2 Power up
-        self.write_reg(0x4b, 0x0f)?; // ADC 1/2 Power up
 
-        // 5. Digital Kickstart
-        self.write_reg(0x00, 0x71)?;
-        self.write_reg(0x00, 0x41)?;
+        // 5. 增益配置 (+30dB)
+        self.write_reg(0x43, 0x1B)?;
+        self.write_reg(0x44, 0x1B)?;
+        self.write_reg(0x45, 0x1B)?;
+        self.write_reg(0x46, 0x1B)?;
 
-        info!("ES7210 initialized via I2C.");
+        // 6. 物理通道映射
+        self.write_reg(0x47, 0x08)?; // 打开 ADC1，听左麦 (AMIC1)
+        self.write_reg(0x48, 0x09)?; // 打开 ADC2，听右麦 (AMIC2)
+        self.write_reg(0x49, 0x00)?; // 彻底关闭 ADC3
+        self.write_reg(0x4A, 0x00)?; // 彻底关闭 ADC4
+
+        info!("ES7210 is FINALLY correctly powered and armed!");
         Ok(())
     }
 }
