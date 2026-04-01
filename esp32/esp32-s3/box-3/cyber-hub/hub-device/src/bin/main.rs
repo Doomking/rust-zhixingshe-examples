@@ -1,4 +1,5 @@
-#![no_std] // 不使用 Rust 标准库 (std)，因为 ESP32 属于嵌入式裸机环境，没有完整的操作系统支持
+#![no_std]
+// 不使用 Rust 标准库 (std)，因为 ESP32 属于嵌入式裸机环境，没有完整的操作系统支持
 #![no_main] // 禁用默认的 main 函数，我们会使用 `#[esp_rtos::main]` 宏来定义入口
 #![deny(
     clippy::mem_forget,
@@ -6,19 +7,20 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use defmt::info;           // Defmt 是一个专门为嵌入式系统设计的极度轻量级日志框架
-use embassy_executor::Spawner;            // Embassy 异步执行器的任务生成器
-use embassy_net::{Config, StackResources};         // Embassy 网络协议栈配置和核心栈对象
-use embassy_time::{Duration, Timer};      // Embassy 的异步定时器依赖
-use esp_hal::clock::CpuClock;             // ESP-HAL 时钟配置
-use esp_hal::rng::Rng;                    // 硬件随机数发生器
-use esp_hal::timer::timg::TimerGroup;     // 硬件定时器外设，用于驱动系统的异步时钟
+use defmt::info; // Defmt 是一个专门为嵌入式系统设计的极度轻量级日志框架
+use embassy_executor::Spawner; // Embassy 异步执行器的任务生成器
+use embassy_net::{Config, StackResources}; // Embassy 网络协议栈配置和核心栈对象
+use embassy_time::{Duration, Timer}; // Embassy 的异步定时器依赖
+use esp_hal::clock::CpuClock; // ESP-HAL 时钟配置
+use esp_hal::rng::Rng; // 硬件随机数发生器
+use esp_hal::timer::timg::TimerGroup; // 硬件定时器外设，用于驱动系统的异步时钟
 
 // 从外部模块引入刚刚重构好的三大网络任务
-use cyber_hub::wifi::{wifi_task, net_task};
-use cyber_hub::tcp::tcp_client_task;
+use cyber_hub::audio::{Es8311, audio_record_task, dummy_tx_task};
 use cyber_hub::display::draw_cyber_hub_ui;
 use cyber_hub::imu::imu_task;
+use cyber_hub::tcp::tcp_client_task;
+use cyber_hub::wifi::{net_task, wifi_task};
 
 use esp_backtrace as _; // 引入官方的无敌堆栈回溯与 Panic 处理工具
 
@@ -67,16 +69,16 @@ async fn main(spawner: Spawner) -> ! {
     // ------------------------------------------------------------------- //
     // ESPRadio 负责控制底层无线射频硬件
     let radio_init = alloc::boxed::Box::leak(alloc::boxed::Box::new(
-        esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller")
+        esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller"),
     ));
-    
+
     // 生成 Wi-Fi Controller (用于控制连接逻辑) 和 Interface (用于绑定 TCP/IP 协议栈)
     let (wifi_controller, interfaces) =
         esp_radio::wifi::new(radio_init, peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
 
     let wifi_interface = interfaces.sta; // 拿到客户端 (Station) 的虚拟网卡
-    
+
     #[allow(unused_mut)]
     let mut rng = Rng::new(); // 生成随机数种子（对于 TCP 连接安全和 DHCP 握手很重要）
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
@@ -95,9 +97,9 @@ async fn main(spawner: Spawner) -> ! {
     // ------------------------------------------------------------------- //
     // SPI 屏幕物理驱动初始化 (Phase 2)
     // ------------------------------------------------------------------- //
-    use esp_hal::spi::master::Spi;
     use esp_hal::gpio::{Level, Output, OutputConfig};
-    
+    use esp_hal::spi::master::Spi;
+
     let sck = peripherals.GPIO7;
     let mosi = peripherals.GPIO6;
     let dc = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
@@ -105,12 +107,12 @@ async fn main(spawner: Spawner) -> ! {
     // ILI9342C on BOX-3: reset_active_high=1 - we manage reset manually
     let mut rst = Output::new(peripherals.GPIO48, Level::High, OutputConfig::default());
     let mut backlight = Output::new(peripherals.GPIO47, Level::Low, OutputConfig::default());
-    
+
     info!("Initializing SPI Display...");
     let spi_config = esp_hal::spi::master::Config::default()
         .with_frequency(esp_hal::time::Rate::from_mhz(40))
         .with_mode(esp_hal::spi::Mode::_0);
-        
+
     let spi = Spi::new(peripherals.SPI2, spi_config)
         .expect("SPI Init")
         .with_sck(sck)
@@ -122,19 +124,28 @@ async fn main(spawner: Spawner) -> ! {
         type Error = B::Error;
     }
     impl<B: embedded_hal::spi::SpiBus<u8>> embedded_hal::spi::SpiBus<u8> for ChunkedSpiBus<B> {
-        fn read(&mut self, words: &mut [u8]) -> Result<(), B::Error> { self.0.read(words) }
+        fn read(&mut self, words: &mut [u8]) -> Result<(), B::Error> {
+            self.0.read(words)
+        }
         fn write(&mut self, words: &[u8]) -> Result<(), B::Error> {
             for chunk in words.chunks(60) {
                 self.0.write(chunk)?;
             }
             Ok(())
         }
-        fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), B::Error> { self.0.transfer(read, write) }
-        fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), B::Error> { self.0.transfer_in_place(words) }
-        fn flush(&mut self) -> Result<(), B::Error> { self.0.flush() }
+        fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), B::Error> {
+            self.0.transfer(read, write)
+        }
+        fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), B::Error> {
+            self.0.transfer_in_place(words)
+        }
+        fn flush(&mut self) -> Result<(), B::Error> {
+            self.0.flush()
+        }
     }
 
-    let spi_device = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(ChunkedSpiBus(spi), cs).expect("SPI");
+    let spi_device =
+        embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(ChunkedSpiBus(spi), cs).expect("SPI");
     let di = display_interface_spi::SPIInterface::new(spi_device, dc);
 
     let mut delay = esp_hal::delay::Delay::new();
@@ -142,26 +153,27 @@ async fn main(spawner: Spawner) -> ! {
     // 手动执行 Active-HIGH Reset序列: HIGH(复位) -> 延时 -> LOW(释放)
     rst.set_high(); // 触发复位
     delay.delay_millis(20u32);
-    rst.set_low();  // 释放复位，进入正常工作模式
+    rst.set_low(); // 释放复位，进入正常工作模式
     delay.delay_millis(150u32); // 等待 ILI9342C 内部初始化完成
 
     info!("Initializing ILI9342C SPI Display...");
-    let builder = mipidsi::Builder::new(mipidsi::models::ILI9342CRgb565, di)
-        .orientation(mipidsi::options::Orientation::new().rotate(mipidsi::options::Rotation::Deg180));
+    let builder = mipidsi::Builder::new(mipidsi::models::ILI9342CRgb565, di).orientation(
+        mipidsi::options::Orientation::new().rotate(mipidsi::options::Rotation::Deg180),
+    );
     // 注意：不使用 .reset_pin()，因为 mipidsi 假设 active-LOW reset，对 BOX-3 是反的
-        
+
     info!("Builder configured. Calling init()...");
     let mut display = match builder.init(&mut delay) {
         Ok(d) => {
             info!("Mipidsi display init successful!");
             d
-        },
-        Err(e) => {
+        }
+        Err(_e) => {
             defmt::error!("FATAL: Display init failed with error!");
             panic!("Display init error");
         }
     };
-    
+
     // 点亮背光
     backlight.set_high();
 
@@ -169,19 +181,58 @@ async fn main(spawner: Spawner) -> ! {
     draw_cyber_hub_ui(&mut display, "INIT: Wait for DHCP...").expect("Failed to draw CyberHub UI");
 
     // ------------------------------------------------------------------- //
-    // I2C 陀螺仪驱动初始化 (Phase 2)
+    // I2C & 音频/陀螺仪外设初始化 (Phase 3)
     // ------------------------------------------------------------------- //
     use esp_hal::i2c::master::I2c;
-    use icm42670::{Icm42670, Address};
-    
-    info!("Initializing I2C IMU...");
-    let i2c = I2c::new(peripherals.I2C0, esp_hal::i2c::master::Config::default())
+    use esp_hal::i2s::master::{Config as I2sConfig, DataFormat, I2s};
+    use icm42670::{Address, Icm42670};
+
+    info!("Initializing I2C Bus...");
+    let mut i2c = I2c::new(peripherals.I2C0, esp_hal::i2c::master::Config::default())
         .expect("I2C Init")
         .with_sda(peripherals.GPIO8)
         .with_scl(peripherals.GPIO18);
-    
-    // 初始化 6轴传感器 ICM42607-P
+
+    // 1. 初始化音频编解码器 ES8311 (顺序初始化，暂时不占坑)
+    let mut codec = Es8311::new(&mut i2c);
+    codec.init().expect("Codec Init");
+
+    // 2. 将 I2C 交给陀螺仪驱动 (ICM42607-P)
     let imu = Icm42670::new(i2c, Address::Primary).expect("Failed to init IMU");
+
+    // 3. 初始化 I2S 音频接口 (录音: GPIO16, 播音: GPIO15, 时钟: GPIO2/17/45)
+    let dma_channel = peripherals.DMA_CH0;
+
+    // ------------------------------------------------------------------- //
+    // I2S & DMA 手动分配 (Fix Phase 3 Panic: OutOfDescriptors)
+    // ------------------------------------------------------------------- //
+    use esp_hal::dma::DmaDescriptor;
+    use static_cell::StaticCell;
+
+    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
+        esp_hal::dma_circular_buffers!(16384, 1024);
+
+    let i2s = I2s::new(
+        peripherals.I2S0,
+        dma_channel,
+        I2sConfig::new_tdm_philips()
+            .with_data_format(DataFormat::Data16Channel16)
+            .with_sample_rate(esp_hal::time::Rate::from_hz(16000)),
+    )
+    .expect("I2S Init Failed")
+    .into_async()
+    .with_mclk(peripherals.GPIO2);
+
+    let i2s_rx = i2s
+        .i2s_rx
+        .with_bclk(peripherals.GPIO17)
+        .with_ws(peripherals.GPIO45)
+        .with_din(peripherals.GPIO16)
+        .build(rx_descriptors);
+
+    // 【极其关键的一步】：不要忘了我们之前踩过的坑！
+    // 必须把 i2s_tx 也 build 出来，补全硬件和 Async Waker 的内存状态。
+    let i2s_tx = i2s.i2s_tx.build(tx_descriptors);
 
     // ------------------------------------------------------------------- //
     // 任务派发 (Spawning)
@@ -191,9 +242,11 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(wifi_task(wifi_controller)).unwrap();
     spawner.spawn(tcp_client_task(stack)).unwrap();
     spawner.spawn(imu_task(imu)).unwrap();
+    spawner.spawn(dummy_tx_task(i2s_tx, tx_buffer)).unwrap();
+    spawner.spawn(audio_record_task(i2s_rx, rx_buffer)).unwrap();
 
     info!("Waiting for DHCP config...");
-    
+
     // 主事件循环中，我们观察一下是否获取到了 DHCP IP 地址
     loop {
         if stack.is_config_up() {
