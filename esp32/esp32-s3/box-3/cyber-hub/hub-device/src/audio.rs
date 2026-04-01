@@ -4,6 +4,58 @@ use esp_hal::Blocking;
 use esp_hal::i2c::master::I2c;
 
 pub const ES8311_ADDR: u8 = 0x18;
+pub const ES7210_ADDR: u8 = 0x40;
+
+pub struct Es7210<'a> {
+    i2c: &'a mut I2c<'static, Blocking>,
+}
+
+impl<'a> Es7210<'a> {
+    pub fn new(i2c: &'a mut I2c<'static, Blocking>) -> Self {
+        Self { i2c }
+    }
+
+    fn write_reg(&mut self, reg: u8, val: u8) -> Result<(), ()> {
+        self.i2c.write(ES7210_ADDR, &[reg, val]).map_err(|_| ())
+    }
+
+    pub async fn init(&mut self) -> Result<(), ()> {
+        info!("Initializing ES7210 ADC (I2C)...");
+
+        // 1. Reset
+        self.write_reg(0x00, 0xFF)?;
+        Timer::after(Duration::from_millis(10)).await;
+
+        // 2. Power & Clock Setup
+        self.write_reg(0x01, 0x20)?;
+        self.write_reg(0x09, 0x30)?;
+        self.write_reg(0x0a, 0x30)?;
+
+        // 3. I2S Config (16-bit, 16kHz based on 12.288MHz MCLK)
+        self.write_reg(0x11, 0x60)?; // 16-bit I2S Mode
+        self.write_reg(0x07, 0x20)?; // OSR = 128
+        self.write_reg(0x02, 0xC3)?; // Clock Div
+        self.write_reg(0x04, 0x03)?; // LRCK Divider High (16kHz)
+        self.write_reg(0x05, 0x00)?; // LRCK Divider Low
+
+        // 4. Analog & MIC Config
+        self.write_reg(0x40, 0xC3)?; // Analog power
+        self.write_reg(0x41, 0x70)?; // MIC Bias
+        self.write_reg(0x42, 0x70)?;
+        self.write_reg(0x43, 0x1E)?; // MIC1 Gain (+24dB)
+        self.write_reg(0x44, 0x1E)?; // MIC2 Gain (+24dB)
+        self.write_reg(0x47, 0x08)?; // MIC1 Power up
+        self.write_reg(0x48, 0x08)?; // MIC2 Power up
+        self.write_reg(0x4b, 0x0f)?; // ADC 1/2 Power up
+
+        // 5. Digital Kickstart
+        self.write_reg(0x00, 0x71)?;
+        self.write_reg(0x00, 0x41)?;
+
+        info!("ES7210 initialized via I2C.");
+        Ok(())
+    }
+}
 
 pub struct Es8311<'a> {
     i2c: &'a mut I2c<'static, Blocking>,
@@ -18,7 +70,7 @@ impl<'a> Es8311<'a> {
         self.i2c.write(ES8311_ADDR, &[reg, val]).map_err(|_| ())
     }
 
-    pub fn init(&mut self) -> Result<(), ()> {
+    pub async fn init(&mut self) -> Result<(), ()> {
         info!("Initializing ES8311 codec (I2C)...");
 
         // 基础初始化序列
@@ -43,100 +95,114 @@ impl<'a> Es8311<'a> {
     }
 }
 
+extern crate alloc; // 确保顶部能调用分配器
+
 // ------------------------------------------------------------------------------------------------ //
 // [后台任务 4]: 音频采集任务
-// 策略：使用 I2S Circular DMA 持续读取麦克风数据
 // ------------------------------------------------------------------------------------------------ //
 #[embassy_executor::task]
 pub async fn audio_record_task(
     i2s_rx: esp_hal::i2s::master::I2sRx<'static, esp_hal::Async>,
     rx_buffer: &'static mut [u8; 16384],
 ) {
-    info!("Waiting for Wi-Fi and system to stabilize before starting Audio...");
-    // [终极修复]：延时 3 秒，避开 Wi-Fi 握手极其消耗 CPU 的“交通管制期”
-    Timer::after(Duration::from_secs(3)).await;
-    info!("Starting Audio Recording task...");
+    info!("Waiting for TX clock to stabilize...");
+    // RX 晚 100ms 启动，完美接住 TX 建立的时钟
+    Timer::after(Duration::from_millis(3100)).await;
+    info!("Starting Audio Recording task (RX ARMING)...");
 
-    // 配置分块缓冲区（512 字节，对应我们的网络数据单元）
-    let mut chunk = [0u8; 512];
+    // 【终极绝杀】：分配一个和 DMA 底层环形缓冲区一模一样大的动态数组！
+    // 这样无论积压了多少数据，pop() 都能一次性安全吞下，彻底根除 BufferTooSmall 死锁！
+    let mut dma_chunk = alloc::vec![0u8; 16384];
 
-    // 启动循环 DMA 传输
-    // 注意：在 esp-hal 1.0 中，我们不再手动管理原始 buffer，而是通过 transfer 对象 pop 数据
+    let mut late_err_count: u32 = 0;
+    let mut received_blocks: u32 = 0;
+    let mut last_report_time = embassy_time::Instant::now();
+
     let mut transfer = i2s_rx
         .read_dma_circular_async(rx_buffer)
         .expect("Failed to start I2S DMA");
-    // ------------------------------------------------ //
-    // [新增]：高频统计变量
-    // ------------------------------------------------ //
-    let mut late_err_count: u32 = 0; // 记录丢包次数
-    let mut last_report_time = embassy_time::Instant::now(); // 记录上次汇报时间
+
+    info!("RX DMA Armed!");
+
     loop {
-        // 使用 async pop 获取数据。当 DMA 缓冲区有足够数据时，它会返回。
-        match transfer.pop(&mut chunk).await {
+        // 使用 16KB 的海量吞吐碗去接水
+        match transfer.pop(&mut dma_chunk).await {
             Ok(n) if n > 0 => {
-                // 将采集到的 PCM 数据发送到网络同步 Channel
-                // crate::AUDIO_STREAM_CHANNEL.send(chunk).await;
-                warn!("Audio chunk received: {}", n);
-                if let Err(_) = crate::AUDIO_STREAM_CHANNEL.try_send(chunk) {
-                    // 这里可以加一句 trace 日志（但不要用 info/warn，否则会刷屏）
-                    // defmt::trace!("Channel full, dropping audio chunk");
+                received_blocks += 1;
+
+                // 将一口气吞下的大块头，优雅地切成 512 字节的网络小块发送
+                for chunk_slice in dma_chunk[..n].chunks(512) {
+                    let mut send_buf = [0u8; 512];
+                    let len = chunk_slice.len();
+                    send_buf[..len].copy_from_slice(chunk_slice);
+
+                    if let Err(_) = crate::AUDIO_STREAM_CHANNEL.try_send(send_buf) {
+                        // 通道满时静默丢弃旧音频
+                    }
                 }
             }
             Ok(_) => {
                 Timer::after(Duration::from_millis(1)).await;
             }
-            Err(e) => {
-                // warn!("I2S DMA Pop Error: {:?}", defmt::Debug2Format(&e));
-                // Timer::after(Duration::from_millis(100)).await;
+            Err(_e) => {
+                if late_err_count == 0 {
+                    defmt::error!("I2S DMA CRITICAL ERROR: {:?}", defmt::Debug2Format(&_e));
+                }
                 late_err_count += 1;
                 Timer::after(Duration::from_millis(2)).await;
             }
         }
-        // ------------------------------------------------ //
-        // [新增]：低频汇报逻辑 (每隔 5 秒汇报一次)
-        // ------------------------------------------------ //
+
         if last_report_time.elapsed() > Duration::from_secs(5) {
             if late_err_count > 0 {
-                // 如果有错误，集中打印一次，然后清零
-                warn!(
-                    "[AUDIO STATS] I2S DMA Late Errors in last 5s: {}",
-                    late_err_count
+                defmt::warn!(
+                    "[AUDIO STATS] DMA Errors: {} | Blocks received: {}",
+                    late_err_count,
+                    received_blocks
                 );
                 late_err_count = 0;
+            } else if received_blocks > 0 {
+                defmt::info!(
+                    "[AUDIO STATS] Running perfectly. 0 errors, {} blocks received in last 5s.",
+                    received_blocks
+                );
             } else {
-                // 如果极其完美，也可以打印一句心跳日志（如果不喜欢可以注释掉）
-                info!("[AUDIO STATS] Running perfectly. 0 errors in last 5s.");
+                defmt::warn!(
+                    "[AUDIO STATS] No errors, but NO DATA received! Check hardware clocks."
+                );
             }
-            // 重置计时器
+            received_blocks = 0;
             last_report_time = embassy_time::Instant::now();
         }
     }
 }
 
 // ------------------------------------------------------------------------------------------------ //
-// [后台任务 5]: 影子发送任务 (专门喂饱硬件 DMA，防止 TX 报错干扰 RX)
+// [后台任务 5]: 影子发送任务 (维持时钟心跳)
 // ------------------------------------------------------------------------------------------------ //
 #[embassy_executor::task]
 pub async fn dummy_tx_task(
-    mut i2s_tx: esp_hal::i2s::master::I2sTx<'static, esp_hal::Async>,
+    i2s_tx: esp_hal::i2s::master::I2sTx<'static, esp_hal::Async>,
     tx_buffer: &'static mut [u8; 1024],
 ) {
-    // 必须和 RX 任务一样，延时 3 秒，等 Wi-Fi 连上再启动硬件
-    Timer::after(Duration::from_secs(3)).await;
-    info!("Starting Dummy TX task to silence hardware alarms...");
+    // TX 提前 100ms 准时在 3.0 秒启动，主导建立硬件时钟
+    Timer::after(Duration::from_millis(3000)).await;
+    info!("Starting Dummy TX task to drive hardware clocks...");
 
-    // 启动 TX DMA
+    let tx_data = [0u8; 1024];
+
     let mut transfer = i2s_tx
         .write_dma_circular_async(tx_buffer)
         .expect("Failed to start dummy TX DMA");
 
-    // 塞入全 0 的静音数据包
-    let chunk = [0u8; 512];
-
     loop {
-        // 不断地 push 数据，堵住 TX 的嘴，绝不让它触发 Underflow 中断
-        if let Err(_e) = transfer.push(&chunk).await {
-            // 静默处理即可
+        match transfer.push(&tx_data).await {
+            Ok(_) => {
+                Timer::after(Duration::from_millis(1)).await;
+            }
+            Err(_e) => {
+                Timer::after(Duration::from_millis(10)).await;
+            }
         }
     }
 }
