@@ -20,49 +20,51 @@ impl<'a> Es7210<'a> {
     }
 
     pub async fn init(&mut self) -> Result<(), ()> {
-        info!("Initializing ES7210 ADC (I2C) with ABSOLUTE FINAL TRUTH...");
+        info!("Initializing ES7210 ADC (I2C) with ESP-ADF OFFICIAL C-SOURCE TRUTH...");
 
         // 1. 强制复位
         self.write_reg(0x00, 0xFF)?;
-        Timer::after(Duration::from_millis(50)).await;
-        self.write_reg(0x00, 0x41)?; // 解除复位
+        Timer::after(Duration::from_millis(20)).await;
+        self.write_reg(0x00, 0x41)?;
 
-        // 2. 供电与核心时钟树
-        // 【真相大白】：0x00 才是真正的“全功率开启”！(0 代表不 Power Down)
-        self.write_reg(0x01, 0x00)?;
+        // 2. 初始状态：先关闭时钟和电源，安全配置
+        self.write_reg(0x01, 0x1F)?;
+        self.write_reg(0x02, 0x10)?; // 官方配置：时间控制
 
-        self.write_reg(0x02, 0x00)?;
-        self.write_reg(0x03, 0x20)?; // ADC OSR
-        self.write_reg(0x04, 0x01)?;
-        self.write_reg(0x05, 0x00)?;
-        self.write_reg(0x06, 0x03)?; // MCLK 分频
-        self.write_reg(0x07, 0x00)?;
-        self.write_reg(0x08, 0x00)?; // 设为 Slave 模式
-        self.write_reg(0x09, 0x30)?; // 锁相环时序
-        self.write_reg(0x0A, 0x30)?;
-        self.write_reg(0x0B, 0x00)?;
-        self.write_reg(0x0C, 0x00)?;
+        // 3. 官方配置：高通滤波器 (消除直流偏置)
+        self.write_reg(0x22, 0x0A)?;
+        self.write_reg(0x23, 0x0A)?;
 
-        // 3. 数据格式
-        self.write_reg(0x11, 0x60)?; // 16-bit, 标准 I2S
-        self.write_reg(0x12, 0x02)?;
-
-        // 4. 麦克风偏置供电
-        self.write_reg(0x40, 0x42)?;
+        // 4. 麦克风偏置与模拟供电
+        self.write_reg(0x40, 0x43)?;
         self.write_reg(0x41, 0x70)?;
         self.write_reg(0x42, 0x70)?;
 
-        // 5. 增益配置 (+30dB)
+        // 5. 时钟架构配置 (至关重要)
+        self.write_reg(0x05, 0x20)?; // 官方配置：时钟发生器
+        self.write_reg(0x06, 0x00)?; // 官方配置：MCLK 为 256Fs 时，分频必须为 0！
+        self.write_reg(0x07, 0x00)?;
+        self.write_reg(0x08, 0x00)?; // Slave 模式
+
+        // 6. I2S 数据格式：16-bit I2S
+        self.write_reg(0x11, 0x60)?;
+        self.write_reg(0x12, 0x00)?;
+
+        // 7. 硬件增益 (官方默认为 30dB)
         self.write_reg(0x43, 0x1B)?;
         self.write_reg(0x44, 0x1B)?;
         self.write_reg(0x45, 0x1B)?;
         self.write_reg(0x46, 0x1B)?;
 
-        // 6. 物理通道映射
-        self.write_reg(0x47, 0x08)?; // 打开 ADC1，听左麦 (AMIC1)
-        self.write_reg(0x48, 0x09)?; // 打开 ADC2，听右麦 (AMIC2)
-        self.write_reg(0x49, 0x00)?; // 彻底关闭 ADC3
-        self.write_reg(0x4A, 0x00)?; // 彻底关闭 ADC4
+        // 8. 物理通道映射：AMIC1(左) -> ADC1, AMIC3(右) -> ADC2
+        self.write_reg(0x47, 0x08)?;
+        self.write_reg(0x48, 0x0A)?;
+        self.write_reg(0x49, 0x09)?;
+        self.write_reg(0x4A, 0x0B)?;
+
+        // 9. 唤醒并启动 ADC
+        self.write_reg(0x04, 0x03)?; // 给 ADC1 和 ADC2 供电
+        self.write_reg(0x01, 0x00)?; // 启动全部时钟树与电源！
 
         info!("ES7210 is FINALLY correctly powered and armed!");
         Ok(())
@@ -118,12 +120,9 @@ pub async fn audio_record_task(
     rx_buffer: &'static mut [u8; 16384],
 ) {
     info!("Waiting for TX clock to stabilize...");
-    // RX 晚 100ms 启动，完美接住 TX 建立的时钟
     Timer::after(Duration::from_millis(3100)).await;
     info!("Starting Audio Recording task (RX ARMING)...");
 
-    // 【终极绝杀】：分配一个和 DMA 底层环形缓冲区一模一样大的动态数组！
-    // 这样无论积压了多少数据，pop() 都能一次性安全吞下，彻底根除 BufferTooSmall 死锁！
     let mut dma_chunk = alloc::vec![0u8; 16384];
 
     let mut late_err_count: u32 = 0;
@@ -137,19 +136,30 @@ pub async fn audio_record_task(
     info!("RX DMA Armed!");
 
     loop {
-        // 使用 16KB 的海量吞吐碗去接水
         match transfer.pop(&mut dma_chunk).await {
             Ok(n) if n > 0 => {
                 received_blocks += 1;
 
-                // 将一口气吞下的大块头，优雅地切成 512 字节的网络小块发送
-                for chunk_slice in dma_chunk[..n].chunks(512) {
+                // 【修复2：32位降维打击】因为用 Data32Channel32，每次收到的是 4 字节
+                // 我们每次切下 1024 字节的 32-bit 数据，提纯后刚好是 512 字节的 16-bit 原音！
+                for chunk_slice in dma_chunk[..n].chunks(1024) {
                     let mut send_buf = [0u8; 512];
-                    let len = chunk_slice.len();
-                    send_buf[..len].copy_from_slice(chunk_slice);
+                    let mut out_idx = 0;
 
-                    if let Err(_) = crate::AUDIO_STREAM_CHANNEL.try_send(send_buf) {
-                        // 通道满时静默丢弃旧音频
+                    // 每次取 4 个字节 (一个 32-bit 样本)
+                    for bytes in chunk_slice.chunks_exact(4) {
+                        // 在小端序和标准 I2S 中，有效的声音数据(高位)存在 byte[2] 和 byte[3]
+                        // 前两个字节全是 0，我们直接把它们当垃圾扔掉！
+                        send_buf[out_idx] = bytes[2];
+                        send_buf[out_idx + 1] = bytes[3];
+                        out_idx += 2;
+                    }
+
+                    if out_idx > 0 {
+                        // 把最纯净的 16-bit 声音发进 TCP 网络！
+                        if let Err(_) = crate::AUDIO_STREAM_CHANNEL.try_send(send_buf) {
+                            // 通道满时静默丢弃
+                        }
                     }
                 }
             }
@@ -165,6 +175,7 @@ pub async fn audio_record_task(
             }
         }
 
+        // --- 下方的状态打印代码保持不变 ---
         if last_report_time.elapsed() > Duration::from_secs(5) {
             if late_err_count > 0 {
                 defmt::warn!(
@@ -179,9 +190,7 @@ pub async fn audio_record_task(
                     received_blocks
                 );
             } else {
-                defmt::warn!(
-                    "[AUDIO STATS] No errors, but NO DATA received! Check hardware clocks."
-                );
+                defmt::warn!("[AUDIO STATS] No errors, but NO DATA received!");
             }
             received_blocks = 0;
             last_report_time = embassy_time::Instant::now();

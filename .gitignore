@@ -55,3 +55,4 @@ coverage/
 manga/**/models/
 manga/**/output/
 *.pcm
+*.wav

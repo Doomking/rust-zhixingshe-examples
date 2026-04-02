@@ -199,7 +199,7 @@ async fn main(spawner: Spawner) -> ! {
         dma_channel,
         // 【关键修复 1】：把 new_tdm_philips 改为 default()，回归标准 I2S
         I2sConfig::default()
-            .with_data_format(DataFormat::Data16Channel16)
+            .with_data_format(DataFormat::Data32Channel32)
             .with_sample_rate(esp_hal::time::Rate::from_hz(16000)),
     )
     .expect("I2S Init Failed")
