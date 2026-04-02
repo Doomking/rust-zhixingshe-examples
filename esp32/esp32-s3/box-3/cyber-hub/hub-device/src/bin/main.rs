@@ -191,15 +191,14 @@ async fn main(spawner: Spawner) -> ! {
 
     let dma_channel = peripherals.DMA_CH0;
     let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
-        esp_hal::dma_circular_buffers!(16384, 1024);
+        esp_hal::dma_circular_buffers!(32768, 4096);
 
     // 启动 I2S 接口 (录音: GPIO16, 播音: GPIO15, 时钟: GPIO2/17/45)
     let i2s = I2s::new(
         peripherals.I2S0,
         dma_channel,
-        // 【关键修复 1】：把 new_tdm_philips 改为 default()，回归标准 I2S
         I2sConfig::default()
-            .with_data_format(DataFormat::Data32Channel32)
+            .with_data_format(DataFormat::Data16Channel16)
             .with_sample_rate(esp_hal::time::Rate::from_hz(16000)),
     )
     .expect("I2S Init Failed")
@@ -208,15 +207,13 @@ async fn main(spawner: Spawner) -> ! {
 
     let i2s_rx = i2s
         .i2s_rx
-        .with_bclk(peripherals.GPIO17)
-        .with_ws(peripherals.GPIO45)
         .with_din(peripherals.GPIO16)
         .build(rx_descriptors);
 
-    // 【关键修复 2】：必须加上 with_dout(peripherals.GPIO15)！
-    // 给 TX 一个物理排气口，防止 TX 阻塞拖死全局 I2S 时钟。
     let i2s_tx = i2s
         .i2s_tx
+        .with_bclk(peripherals.GPIO17)
+        .with_ws(peripherals.GPIO45)
         .with_dout(peripherals.GPIO15)
         .build(tx_descriptors);
 
@@ -233,29 +230,41 @@ async fn main(spawner: Spawner) -> ! {
         .with_sda(peripherals.GPIO8)
         .with_scl(peripherals.GPIO18);
 
-    // 1. 初始化音频编解码器 ES8311 (扬声器)
-    let mut codec_out = Es8311::new(&mut i2c);
-    codec_out.init().await.expect("ES8311 Init");
-
-    // 2. 初始化音频编解码器 ES7210 (双麦克风阵列)
-    let mut codec_in = Es7210::new(&mut i2c);
-    codec_in.init().await.expect("ES7210 Init");
-
-    // 3. 将 I2C 交给陀螺仪驱动 (ICM42607-P)
-    let imu = Icm42670::new(i2c, Address::Primary).expect("Failed to init IMU");
-
     // ------------------------------------------------------------------- //
-    // 任务派发 (Spawning)
+    // 网络任务派发 (Spawning)
     // ------------------------------------------------------------------- //
-    // 我们将把写好的各个独立子系统变成并发的后台任务全部“扔”给调度系统运行。
+    // 必须首先派发网络任务！因为 WiFi 底层连接时会极大幅度地阻塞 CPU(长达1-2秒)
     spawner.spawn(net_task(runner)).unwrap();
     spawner.spawn(wifi_task(wifi_controller)).unwrap();
     spawner.spawn(tcp_client_task(stack)).unwrap();
-    spawner.spawn(imu_task(imu)).unwrap();
+
+    info!("Waiting 3.5 seconds for WiFi CPU-hogging to finish before arming Audio DMA...");
+    Timer::after(Duration::from_millis(3500)).await;
+
+    // ------------------------------------------------------------------- //
+    // 硬件初始化与启动 (此时 CPU 已经完全空闲，没有任何阻塞)
+    // ------------------------------------------------------------------- //
+    // 1. 启动音频硬件引擎 (先开 I2S DMA 时钟！保证引脚立刻输出 BCLK 和 LRCK)
     spawner.spawn(dummy_tx_task(i2s_tx, tx_buffer)).unwrap();
     spawner.spawn(audio_record_task(i2s_rx, rx_buffer)).unwrap();
+    
+    // 短暂等待 DMA 泵稳定时钟信号 (50毫秒足够)
+    Timer::after(Duration::from_millis(50)).await;
 
-    info!("Waiting for DHCP config...");
+    // 2. 初始化音频编解码器 ES8311 (扬声器)
+    let mut codec_out = Es8311::new(&mut i2c);
+    codec_out.init().await.expect("ES8311 Init");
+
+    // 3. 初始化音频编解码器 ES7210 (双麦克风阵列)
+    // 此时 BCLK/WS 已经在稳定输出，Reset将完美锁相！
+    let mut codec_in = Es7210::new(&mut i2c);
+    codec_in.init().await.expect("ES7210 Init");
+
+    // 4. 将 I2C 移交给陀螺仪驱动 (ICM42607-P)
+    let imu = Icm42670::new(i2c, Address::Primary).expect("Failed to init IMU");
+    spawner.spawn(imu_task(imu)).unwrap();
+
+    info!("All systems GO! Device completely armed.");
 
     // 主事件循环中，我们观察一下是否获取到了 DHCP IP 地址
     loop {

@@ -1,0 +1,1 @@
+ffmpeg -f s16le -ar 16000 -ch_layout stereo -i audio_1775131583_48115.pcm output.wav
