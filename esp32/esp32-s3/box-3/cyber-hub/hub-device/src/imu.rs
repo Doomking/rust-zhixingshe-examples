@@ -60,9 +60,23 @@ pub async fn imu_task(mut imu: Icm42670<CriticalSectionDevice<'static, I2c<'stat
                     flip_count = 0;
                 }
             }
-            Err(_e) => {
-                error!("IMU Read Failed! I2C bus error. Cooling down bus for 2s...");
-                Timer::after(Duration::from_secs(2)).await;
+            Err(e) => {
+                error!("IMU Read Failed! Error: {:?}. Retrying once...", defmt::Debug2Format(&e));
+                // 立即重试一次
+                match imu.accel_norm() {
+                    Ok(accel) => {
+                        let z = accel.z;
+                        if tick % 10 == 0 {
+                            info!("IMU Z={} | upright={}", z, is_upright);
+                        }
+                        tick += 1;
+                        // 这里可以继续处理 z，为保持代码简洁直接等下次循环
+                    }
+                    Err(_) => {
+                        error!("IMU Retry Failed! Cooling down bus for 2s...");
+                        Timer::after(Duration::from_secs(2)).await;
+                    }
+                }
             }
         }
 

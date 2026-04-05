@@ -103,7 +103,7 @@ async fn main(spawner: Spawner) -> ! {
     use core::cell::RefCell;
     use critical_section::Mutex as CSMutex;
     let i2c_config = esp_hal::i2c::master::Config::default()
-        .with_frequency(esp_hal::time::Rate::from_khz(40));
+        .with_frequency(esp_hal::time::Rate::from_khz(100));
     let i2c0 = I2c::new(peripherals.I2C0, i2c_config)
         .expect("I2C Init")
         .with_sda(peripherals.GPIO8)
