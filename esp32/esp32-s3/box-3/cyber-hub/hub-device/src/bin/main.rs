@@ -83,7 +83,9 @@ async fn main(spawner: Spawner) -> ! {
     rst.set_high(); delay.delay_millis(20u32); rst.set_low(); delay.delay_millis(150u32);
     let mut display = mipidsi::Builder::new(mipidsi::models::ILI9342CRgb565, di)
         .orientation(mipidsi::options::Orientation::new().rotate(mipidsi::options::Rotation::Deg180))
-        .init(&mut delay).expect("Display Init Failed");
+        .color_order(mipidsi::options::ColorOrder::Bgr)
+        .init(&mut delay)
+        .expect("Display Init Failed");
     delay.delay_millis(100u32); // 给屏幕 100ms 稳定期，防止启动白屏
     backlight.set_high();
 
