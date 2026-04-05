@@ -5,6 +5,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, warn};
 
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -15,24 +17,31 @@ async fn main() -> Result<()> {
 
     let listener = TcpListener::bind(&addr).await?;
     info!("CyberHub Server (Mac) starting on {}...", addr);
-    info!(
-        "AI Backend: {}",
-        std::env::var("AI_BASE_URL").unwrap_or_default()
+    
+    // 初始化系统监控
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing()
+            .with_cpu(CpuRefreshKind::everything())
+            .with_memory(MemoryRefreshKind::everything()),
     );
+    // 首次刷新以获取基准值
+    sys.refresh_all();
+    let sys = std::sync::Arc::new(tokio::sync::Mutex::new(sys));
 
     loop {
         let (socket, addr) = listener.accept().await?;
         info!("Accepted connection from {}", addr);
+        let sys_clone = sys.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket).await {
+            if let Err(e) = handle_connection(socket, sys_clone).await {
                 error!("Error handling connection from {}: {}", addr, e);
             }
         });
     }
 }
 
-async fn handle_connection(mut socket: TcpStream) -> Result<()> {
-    // 1. 初始化 AI 客户端
+async fn handle_connection(socket: TcpStream, sys: std::sync::Arc<tokio::sync::Mutex<System>>) -> Result<()> {
+    // 1. 初始化 AI 客户端 (保留原有逻辑，尽管暂时没用到)
     let base_url =
         std::env::var("AI_BASE_URL").unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
     let api_key = std::env::var("AI_API_KEY").unwrap_or_else(|_| "ollama".to_string());
@@ -53,28 +62,61 @@ async fn handle_connection(mut socket: TcpStream) -> Result<()> {
     let port = socket.peer_addr().map(|a| a.port()).unwrap_or(0);
     let filename = format!("audio_{}_{}.pcm", timestamp, port);
     let mut file = File::create(&filename).await?;
-    info!("Saving audio stream to: {}", filename);
+    info!("Saving continuous audio stream to: {}", filename);
 
-    let mut buffer = [0u8; 1024];
+    // 分离读写流
+    let (mut rd, mut wr) = socket.into_split();
+
+    // 任务 A: 定期采集并发送系统指标到设备
+    let metrics_handle = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            
+            let (cpu_usage, mem_usage) = {
+                let mut s = sys.lock().await;
+                s.refresh_all();
+                
+                let cpu = s.global_cpu_usage() as u8;
+                let mem = (s.used_memory() as f64 / s.total_memory() as f64 * 100.0) as u8;
+                (cpu, mem)
+            };
+
+            info!("[METRICS SEND] CPU: {}%, MEM: {}%", cpu_usage, mem_usage);
+
+            // 协议设计：[0x01: Type][CPU: u8][Mem: u8][Padding: 0x00]
+            let packet = [0x01u8, cpu_usage, mem_usage, 0x00u8];
+            if let Err(e) = wr.write_all(&packet).await {
+                warn!("Failed to send metrics: {}. Stopping metrics loop.", e);
+                break;
+            }
+        }
+    });
+
+    // 任务 B: 接收来自设备的消息 (PCM 或者控制指令)
+    let mut buffer = [0u8; 2048];
     loop {
-        let n = socket.read(&mut buffer).await?;
+        let n = rd.read(&mut buffer).await?;
         if n == 0 {
             break;
         }
 
         let data = &buffer[..n];
         if data.windows(12).any(|w| w == b"lock_screen\n") {
+            info!("[COMMAND] lock_screen received from device!");
             trigger_macos_lock();
         } else {
-            // 收到音频流块，保存到文件并记录
+            // 收到音频流块，持续保存到文件并记录
             info!(
-                "[AUDIO] Received {} bytes. Data snippet: {:02x?}",
+                "[AUDIO] Received {} bytes. Offset file: {}. Snippet: {:02x?}",
                 n,
+                filename,
                 &data[..16.min(n)]
             );
             file.write_all(data).await?;
         }
     }
+
+    metrics_handle.abort();
     info!("Connection closed");
     Ok(())
 }

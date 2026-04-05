@@ -92,7 +92,7 @@
 
 ### 🟡 Phase 2: 躯体与感官 (物理 UI 与操控)
 * **目标：** 让 BOX-3 具备显示能力和动作感知能力。
-* **Task 2.1:** 配置 SPI 驱动与 `embedded-graphics`，点亮屏幕，显示 Phase 1 获取的时间和天气。
+* **Task 2.1:** 配置 SPI 驱动与 `embedded-graphics`，点亮屏幕，显示 Phase 1 获取的时间和天气, CPU 占用率, 内存占用率等监控信息。
 * **Task 2.2:** 配置 I2C 驱动，成功读取 6 轴 IMU 的原始数据。
 * **Task 2.3:** 编写算法识别“翻转”动作，并通过 Phase 1 的 TCP 通道发给 Mac，Mac 收到后执行锁屏命令。
 

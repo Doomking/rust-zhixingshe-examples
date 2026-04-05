@@ -26,11 +26,12 @@ embassy-net = { version = "0.7.1", features = [
   "defmt",
   "dhcpv4",
   "medium-ethernet",
+  "dns",
   "tcp",
   "udp",
 ] }
-embedded-io = { version = "0.7.1", features = ["defmt"] }
-embedded-io-async = { version = "0.7.0", features = ["defmt"] }
+embedded-io = { version = "0.6.1", features = ["defmt-03"] }
+embedded-io-async = { version = "0.6.1", features = ["defmt-03"] }
 
 # === Phase 2 硬件外设驱动 ===
 embedded-graphics = "0.8.1"
@@ -41,8 +42,13 @@ icm42670 = "0.2.0"
 accelerometer = "0.12.0"
 embedded-hal-bus = "0.2.0"
 embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
 embassy-sync = "0.6.0"
 embassy-futures = "0.1.1"
+embassy-embedded-hal = { version = "0.3.0", features = ["defmt"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde-json-core = "0.6"
+sht4x = "0.2.0"
 
 esp-backtrace = { version = "0.14", features = ["esp32s3", "panic-handler", "defmt"] }
 esp-println = { version = "0.11", features = ["esp32s3", "log"] }

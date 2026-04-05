@@ -1,18 +1,17 @@
 use defmt::*;
 use embassy_time::{Duration, Timer};
-use esp_hal::i2c::master::I2c;
-use esp_hal::Blocking;
 use esp_hal::i2s::master::{I2sRx, I2sTx};
+use embedded_hal::i2c::I2c;
 
 pub const ES7210_ADDR: u8 = 0x40;
 pub const ES8311_ADDR: u8 = 0x18;
 
-pub struct Es7210<'a> {
-    i2c: &'a mut I2c<'static, Blocking>,
+pub struct Es7210<I2C> {
+    i2c: I2C,
 }
 
-impl<'a> Es7210<'a> {
-    pub fn new(i2c: &'a mut I2c<'static, Blocking>) -> Self {
+impl<I2C: I2c> Es7210<I2C> {
+    pub fn new(i2c: I2C) -> Self {
         Self { i2c }
     }
 
@@ -54,12 +53,12 @@ impl<'a> Es7210<'a> {
     }
 }
 
-pub struct Es8311<'a> {
-    i2c: &'a mut I2c<'static, Blocking>,
+pub struct Es8311<I2C> {
+    i2c: I2C,
 }
 
-impl<'a> Es8311<'a> {
-    pub fn new(i2c: &'a mut I2c<'static, Blocking>) -> Self {
+impl<I2C: I2c> Es8311<I2C> {
+    pub fn new(i2c: I2C) -> Self {
         Self { i2c }
     }
 
@@ -94,7 +93,6 @@ pub async fn audio_record_task(
 
     let mut send_buf = [0u8; 512];
     let mut out_idx = 0;
-    // [终极防御] DMA_CHUNK 必须在大小上等于或大于 rx_buffer，否则 esp-hal 会触发 BufferTooSmall 死锁！
     static mut DMA_CHUNK: [u8; 32768] = [0u8; 32768];
     let mut last_report = embassy_time::Instant::now();
     let mut last_error_report = embassy_time::Instant::now();
