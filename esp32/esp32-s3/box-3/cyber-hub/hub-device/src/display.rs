@@ -8,7 +8,7 @@ use embedded_graphics::mono_font::{
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::Text;
+use embedded_graphics::text::{Text, Baseline};
 
 // --- 高效渲染包装器 (ScaledDisplay v2.3) ---
 pub struct ScaledDisplay<'a, D> {
@@ -164,17 +164,18 @@ where
     time_str[4] = b'0' + (mins % 10) as u8;
     let time_text = unsafe { core::str::from_utf8_unchecked(&time_str) };
 
-    // --- 紧凑式日期布局修复 (v24) ---
-    // 清理 110px 以涵盖更高位置的时钟和日期区域
+    // --- 紧凑式布局 (v27 微调上移) ---
+    // 清理 110px，让整体布局更紧凑一点
     clear_area(
         display,
         Rectangle::new(Point::new(0, 0), Size::new(320, 110)),
     )?;
-    let mut clock_display = ScaledDisplay::new(display, 3, Point::new(85, 5));
-    Text::new(
+    let mut clock_display = ScaledDisplay::new(display, 3, Point::new(85, 10));
+    Text::with_baseline(
         time_text,
-        Point::new(0, 20),
-        MonoTextStyle::new(&FONT_10X20, Rgb565::new(31, 61, 28)), // #FFF4E0 Creamy Warm White
+        Point::new(0, 0),
+        MonoTextStyle::new(&FONT_10X20, Rgb565::new(31, 61, 28)), // #FFF4E0 Warm White
+        Baseline::Top
     )
     .draw(&mut clock_display)?;
 
@@ -204,11 +205,11 @@ where
     ptr += 4;
     let date_str = unsafe { core::str::from_utf8_unchecked(&date_full[..ptr]) };
 
-    let date_style = MonoTextStyle::new(&FONT_9X15, Rgb565::new(22, 44, 22)); // #B0B0B0 Gray
-    let date_width = ptr * 9;
+    let date_style = MonoTextStyle::new(&FONT_10X20, Rgb565::new(26, 51, 25)); // #D7CCC8 Warm Beige
+    let date_width = ptr * 10;
     let date_x = (320 - date_width as i32) / 2;
-    // 稍微下移日期至 92，调整与时钟的间距
-    Text::new(date_str, Point::new(date_x, 92), date_style).draw(display)?;
+    // 使用 Top 对齐，设为 80
+    Text::with_baseline(date_str, Point::new(date_x, 80), date_style, Baseline::Top).draw(display)?;
     Ok(())
 }
 
@@ -223,69 +224,68 @@ where
     let env_label_style = MonoTextStyle::new(&FONT_9X15, env_color);
     let env_val_style = MonoTextStyle::new(&FONT_10X20, env_color);
 
-    // --- “遮挡修复”与图标下沉 (v24 Calibration) ---
-    // 整体上移避开底部黑边并修正遮挡
-    let y1 = 135; // Row 1 (CPU/TEMP)
-    let y2 = 180; // Row 2 (RAM/HUM) 保持足够间距
-    let label_y_offset = 32;
-    let icon_y_offset = 22; // 图标基准深度下放，对齐数值腰部
+    // --- 居中对齐与微调上抬 (v27) ---
+    let y1 = 142; // Row 1 (CPU/TEMP)
+    let y2 = 187; // Row 2 (RAM/HUM)
 
     // CPU / RAM
     clear_area(
         display,
         Rectangle::new(Point::new(0, y1), Size::new(160, 45)),
     )?;
-    Text::new("CPU:", Point::new(40, y1 + label_y_offset), hw_label_style).draw(display)?;
+    // 标签 y+12 垂直居中于 40px 的数值 (整体右移至 35)
+    Text::with_baseline("CPU:", Point::new(35, y1 + 12), hw_label_style, Baseline::Top).draw(display)?;
     let mut cpu_buf = [0u8; 2];
     let cpu_val = format_num(&mut cpu_buf, status.cpu_usage);
-    let mut cpu_display = ScaledDisplay::new(display, 2, Point::new(80, y1));
-    Text::new(cpu_val, Point::new(0, 20), hw_val_style).draw(&mut cpu_display)?;
-    Text::new("%", Point::new(130, y1 + 40), hw_label_style).draw(display)?;
+    let mut cpu_display = ScaledDisplay::new(display, 2, Point::new(75, y1));
+    Text::with_baseline(cpu_val, Point::new(0, 0), hw_val_style, Baseline::Top).draw(&mut cpu_display)?;
+    // "%" 脚对齐修正 (相对左移一点，设置在 118)
+    Text::with_baseline("%", Point::new(118, y1 + 35), hw_label_style, Baseline::Bottom).draw(display)?;
 
     clear_area(
         display,
         Rectangle::new(Point::new(0, y2), Size::new(160, 45)),
     )?;
-    Text::new("RAM:", Point::new(40, y2 + label_y_offset), hw_label_style).draw(display)?;
+    Text::with_baseline("RAM:", Point::new(35, y2 + 12), hw_label_style, Baseline::Top).draw(display)?;
     let mut ram_buf = [0u8; 2];
     let ram_val = format_num(&mut ram_buf, status.mem_usage);
-    let mut ram_display = ScaledDisplay::new(display, 2, Point::new(80, y2));
-    Text::new(ram_val, Point::new(0, 20), hw_val_style).draw(&mut ram_display)?;
-    Text::new("%", Point::new(130, y2 + 40), hw_label_style).draw(display)?;
+    let mut ram_display = ScaledDisplay::new(display, 2, Point::new(75, y2));
+    Text::with_baseline(ram_val, Point::new(0, 0), hw_val_style, Baseline::Top).draw(&mut ram_display)?;
+    Text::with_baseline("%", Point::new(118, y2 + 35), hw_label_style, Baseline::Bottom).draw(display)?;
 
-    // Temp / Hum (图标像素级对齐 v24)
-    let env_offset = 160;
+    // Temp / Hum (整体右移至 180)
+    let env_offset = 180;
     clear_area(
         display,
-        Rectangle::new(Point::new(env_offset, y1), Size::new(145, 45)),
+        Rectangle::new(Point::new(env_offset, y1), Size::new(140, 45)),
     )?;
     draw_icon(
         display,
         "temp_icon",
-        Point::new(env_offset + 5, y1 + icon_y_offset),
+        Point::new(env_offset + 5, y1 + 15),
         env_color,
     )?;
     let mut temp_buf = [0u8; 2];
     let temp_text = format_num(&mut temp_buf, status.local_temp as u8);
-    let mut temp_display = ScaledDisplay::new(display, 2, Point::new(env_offset + 40, y1));
-    Text::new(temp_text, Point::new(0, 20), env_val_style).draw(&mut temp_display)?;
-    Text::new("°C", Point::new(env_offset + 85, y1 + 40), env_label_style).draw(display)?;
+    let mut temp_display = ScaledDisplay::new(display, 2, Point::new(env_offset + 35, y1));
+    Text::with_baseline(temp_text, Point::new(0, 0), env_val_style, Baseline::Top).draw(&mut temp_display)?;
+    Text::with_baseline("°C", Point::new(env_offset + 75, y1 + 35), env_label_style, Baseline::Bottom).draw(display)?;
 
     clear_area(
         display,
-        Rectangle::new(Point::new(env_offset, y2), Size::new(145, 45)),
+        Rectangle::new(Point::new(env_offset, y2), Size::new(140, 45)),
     )?;
     draw_icon(
         display,
         "hum_icon",
-        Point::new(env_offset + 5, y2 + icon_y_offset),
+        Point::new(env_offset + 5, y2 + 15),
         env_color,
     )?;
     let mut hum_buf = [0u8; 2];
     let hum_text = format_num(&mut hum_buf, status.local_hum);
-    let mut hum_display = ScaledDisplay::new(display, 2, Point::new(env_offset + 40, y2));
-    Text::new(hum_text, Point::new(0, 20), env_val_style).draw(&mut hum_display)?;
-    Text::new("%", Point::new(env_offset + 90, y2 + 40), env_label_style).draw(display)?;
+    let mut hum_display = ScaledDisplay::new(display, 2, Point::new(env_offset + 35, y2));
+    Text::with_baseline(hum_text, Point::new(0, 0), env_val_style, Baseline::Top).draw(&mut hum_display)?;
+    Text::with_baseline("%", Point::new(env_offset + 80, y2 + 35), env_label_style, Baseline::Bottom).draw(display)?;
     Ok(())
 }
 
@@ -293,10 +293,10 @@ pub fn draw_weather<D>(display: &mut D, status: &SystemStatus) -> Result<(), D::
 where
     D: DrawTarget<Color = Rgb565> + OriginDimensions,
 {
-    // --- 紧致化气象行 (v24: y=110) ---
+    // --- 紧致化气象行 (v27: Zone 110-140) ---
     clear_area(
         display,
-        Rectangle::new(Point::new(0, 110), Size::new(320, 25)),
+        Rectangle::new(Point::new(0, 110), Size::new(320, 30)),
     )?;
 
     let desc_raw =
@@ -334,16 +334,17 @@ where
         let w_val = format_wind(&mut wind_buf, status.wind_speed);
 
         let full_str = alloc::format!("{} {}  {}  {}KPH", city_text, desc_text, t_str, w_val);
-        let font_style = MonoTextStyle::new(&FONT_10X20, Rgb565::new(31, 61, 28)); // #FFF4E0 Warm White
+        let font_style = MonoTextStyle::new(&FONT_10X20, Rgb565::new(31, 45, 9)); // #FFB74D Amber Orange
         let total_w = full_str.chars().count() as i32 * 10;
         let x = (320 - total_w) / 2;
-        // 紧缩位置 (v24)
-        Text::new(&full_str, Point::new(x, 125), font_style).draw(display)?;
+        // 放置在 Zone 中心 (110-140) -> 115
+        Text::with_baseline(&full_str, Point::new(x, 115), font_style, Baseline::Top).draw(display)?;
     } else {
-        Text::new(
+        Text::with_baseline(
             "WEATHER UPDATING...",
-            Point::new(95, 125),
+            Point::new(95, 110),
             MonoTextStyle::new(&FONT_6X13, Rgb565::new(150, 150, 150)),
+            Baseline::Top
         )
         .draw(display)?;
     }
