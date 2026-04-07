@@ -64,16 +64,27 @@ async fn handle_connection(socket: TcpStream, sys: std::sync::Arc<tokio::sync::M
     let mut file = File::create(&filename).await?;
     info!("Saving continuous audio stream to: {}", filename);
 
+    // [3.2 Step 1] 初始化 WAV 导出器
+    let wav_filename = filename.replace(".pcm", ".wav");
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: 16000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut wav_writer = hound::WavWriter::create(&wav_filename, spec)?;
+
     // 分离读写流
     let (mut rd, mut wr) = socket.into_split();
 
     // 任务 A: 定期采集并发送系统指标到设备
+    let sys_handle = sys.clone();
     let metrics_handle = tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             
             let (cpu_usage, mem_usage) = {
-                let mut s = sys.lock().await;
+                let mut s = sys_handle.lock().await;
                 s.refresh_all();
                 
                 let cpu = s.global_cpu_usage() as u8;
@@ -94,6 +105,9 @@ async fn handle_connection(socket: TcpStream, sys: std::sync::Arc<tokio::sync::M
 
     // 任务 B: 接收来自设备的消息 (PCM 或者控制指令)
     let mut buffer = [0u8; 2048];
+    let mut is_speaking = false;
+    let mut last_activity = std::time::Instant::now();
+
     loop {
         let n = rd.read(&mut buffer).await?;
         if n == 0 {
@@ -105,16 +119,43 @@ async fn handle_connection(socket: TcpStream, sys: std::sync::Arc<tokio::sync::M
             info!("[COMMAND] lock_screen received from device!");
             trigger_macos_lock();
         } else {
-            // 收到音频流块，持续保存到文件并记录
-            info!(
-                "[AUDIO] Received {} bytes. Offset file: {}. Snippet: {:02x?}",
-                n,
-                filename,
-                &data[..16.min(n)]
-            );
+            // [3.2] VAD 能量检测
+            let mut sum_sq = 0f64;
+            let mut sample_count = 0;
+            
+            // 写入 WAV 并计算能量
+            for chunk in data.chunks_exact(2) {
+                let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+                sum_sq += (sample as f64) * (sample as f64);
+                sample_count += 1;
+                let _ = wav_writer.write_sample(sample);
+            }
+
+            if sample_count > 0 {
+                let rms = (sum_sq / sample_count as f64).sqrt();
+                const VAD_THRESHOLD: f64 = 800.0; // 敏感度阈值
+                
+                if rms > VAD_THRESHOLD {
+                    last_activity = std::time::Instant::now();
+                    if !is_speaking {
+                        is_speaking = true;
+                        println!("\x1b[32m[VAD] Voice Detected! (RMS: {:.0})\x1b[0m", rms);
+                    }
+                } else if is_speaking && last_activity.elapsed().as_millis() > 800 {
+                    // 如果静默超过 800ms，则认为一句话结束
+                    is_speaking = false;
+                    println!("\x1b[33m[VAD] Silence... End of Speech.\x1b[0m");
+                }
+            }
+
+            // 保存原始 PCM
             file.write_all(data).await?;
         }
     }
+
+    // 显式刷新 WAV 头部
+    wav_writer.finalize()?;
+    info!("WAV file finalized: {}", wav_filename);
 
     metrics_handle.abort();
     info!("Connection closed");
