@@ -75,16 +75,40 @@ impl AiProcessor {
         println!("\x1b[35m[STT] Recognition Result: \"{}\"\x1b[0m", text);
 
         // 2. 唤醒词与指令判定 (已移除纠偏层，直接使用原始文本)
-        let keywords = ["知行社", "cyberhub", "你好", "小知", "小智"];
+        // 唤醒词检测：两种策略并行
+        // 策略 A：精确关键词
+        let exact_keywords = ["知行社", "cyberhub", "你好", "您好"];
+        // 策略 B：动态音近匹配 — "小" + 任意 zhì/zhī 音汉字
+        // 覆盖 Whisper 对"小智"的所有常见同音误认（无需逐一枚举）
+        const XIAO_ZHI_CHARS: &str = "智知志字治至支致姿直制质纸值止之只指脂植殖炙挚置帜稚滞";
+
         let mut wake_word_found = false;
         let mut command = String::new();
 
-        for kw in keywords {
+        // 策略 A 检查
+        for kw in exact_keywords {
             if let Some(pos) = text.to_lowercase().find(kw) {
                 wake_word_found = true;
-                let raw_cmd = &text[pos + kw.len()..].trim();
-                command = raw_cmd.trim_start_matches(|c: char| c == ',' || c == '，' || c == ' ' || c == '。').to_string();
+                let raw_cmd = &text[pos + kw.len()..];
+                command = raw_cmd.trim_start_matches(|c: char| ",，。 ".contains(c)).to_string();
                 break;
+            }
+        }
+
+        // 策略 B 检查（若策略 A 未命中）
+        if !wake_word_found {
+            let chars: Vec<char> = text.chars().collect();
+            for i in 0..chars.len().saturating_sub(1) {
+                if chars[i] == '小' && XIAO_ZHI_CHARS.contains(chars[i + 1]) {
+                    wake_word_found = true;
+                    // 提取唤醒词之后的指令部分
+                    let byte_pos: usize = text.char_indices()
+                        .nth(i + 2)
+                        .map(|(b, _)| b)
+                        .unwrap_or(text.len());
+                    command = text[byte_pos..].trim_start_matches(|c: char| ",，。 ".contains(c)).to_string();
+                    break;
+                }
             }
         }
 
@@ -117,7 +141,12 @@ impl AiProcessor {
 
         info!("\x1b[32;1m[WAKE] Command accepted: \"{}\"\x1b[0m", final_command);
 
-        // 4. 发送指令 (此处不再持有锁，可以安全 await)
+        // 4. 优先尝试本地指令路由（无网络延迟）
+        if Self::try_local_command(&final_command) {
+            return Ok(());
+        }
+
+        // 5. 本地无匹配 → 转发 ZeroClaw
         let zc_request = CreateChatCompletionRequestArgs::default()
             .model(&self.model)
             .messages([ChatCompletionRequestUserMessageArgs::default()
@@ -141,6 +170,53 @@ impl AiProcessor {
         }
 
         Ok(())
+    }
+
+    /// 本地指令路由器。
+    /// 如果识别到已知的本地指令，立即执行并返回 true；否则返回 false（交给 ZeroClaw）。
+    fn try_local_command(command: &str) -> bool {
+        use crate::system::control;
+
+        // ── 锁屏 ──────────────────────────────────────────────────────────────
+        if command.contains("锁屏") || command.contains("锁定屏幕") || command.contains("lock screen") {
+            info!("[LOCAL] → lock_screen");
+            control::trigger_macos_lock();
+            return true;
+        }
+
+        // ── 静音 / 取消静音（优先检查，防止被音量逻辑截断）────────────────────
+        if command.contains("取消静音") || command.contains("解除静音")
+            || command.contains("打开声音") || command.contains("恢复声音")
+        {
+            info!("[LOCAL] → unmute");
+            control::unmute();
+            return true;
+        }
+        if command.contains("静音") || command.contains("关掉声音") || command.contains("关闭声音") {
+            info!("[LOCAL] → mute");
+            control::mute();
+            return true;
+        }
+
+        // ── 音量控制（语义分解：主体词 + 方向词，处理"音量再调小一点"等自然说法）──
+        let has_volume_subject = command.contains("音量") || command.contains("声音");
+        if has_volume_subject {
+            let up_words   = ["大", "高", "加", "升", "响"];
+            let down_words = ["小", "低", "减", "降", "轻"];
+            if up_words.iter().any(|w| command.contains(w)) {
+                info!("[LOCAL] → volume_up");
+                control::volume_up();
+                return true;
+            }
+            if down_words.iter().any(|w| command.contains(w)) {
+                info!("[LOCAL] → volume_down");
+                control::volume_down();
+                return true;
+            }
+        }
+
+        // 未匹配任何本地指令 → 交给 ZeroClaw
+        false
     }
 
     fn process_utterance_internally(&self, wav_path: &str) -> Result<String> {

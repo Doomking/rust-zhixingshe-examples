@@ -86,8 +86,12 @@ impl LocalStt {
         // 6. 深度清洗逻辑 (V15：无视长度的括号剥离 + 强制黑名单)
         let mut finalized = result.trim().to_string();
         
-        // A. 拦截显而易见的废话关键词 (YouTube/字幕组幻觉)
-        let hard_blacklist = ["字幕君", "点赞", "订阅", "转发", "不懂", "看不懂", "收看", "关注"];
+        // A. 拦截显而易见的废话关键词 (YouTube/字幕组幻觉 + 提示词回响)
+        let hard_blacklist = [
+            "字幕君", "点赞", "订阅", "转发", "不懂", "看不懂", "收看", "关注",
+            // Whisper prompt-echo：模型在无有效语音时会把 initial_prompt 原文吐出来
+            "这是一段中文语音录音",
+        ];
         for bad_word in hard_blacklist {
             if finalized.contains(bad_word) {
                 debug!("[STT] Hard blacklist suppressed: \"{}\"", finalized);
