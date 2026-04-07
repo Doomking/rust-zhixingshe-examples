@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub ai_model: String,
     pub zc_url: String,
     pub stt_threshold: f64,
+    pub stt_model_path: String,
+    pub use_internal_stt: bool,
 }
 
 impl AppConfig {
@@ -21,9 +23,11 @@ impl AppConfig {
             ai_model: env::var("AI_MODEL").unwrap_or_else(|_| "llama3".to_string()),
             zc_url: env::var("ZEROCLAW_URL").unwrap_or_else(|_| "http://127.0.0.1:42617/v1".to_string()),
             stt_threshold: env::var("VAD_THRESHOLD")
-                .unwrap_or_else(|_| "800.0".to_string())
+                .unwrap_or_else(|_| "2500.0".to_string())
                 .parse()
                 .unwrap_or(800.0),
+            stt_model_path: env::var("STT_MODEL_PATH").unwrap_or_else(|_| "models/ggml-medium.bin".to_string()),
+            use_internal_stt: env::var("USE_INTERNAL_STT").unwrap_or_else(|_| "true".to_string()) == "true",
         }
     }
 }

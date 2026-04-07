@@ -17,19 +17,22 @@ async fn main() -> Result<()> {
     let config = AppConfig::from_env();
     let addr = format!("0.0.0.0:{}", config.port);
 
+    // [V10] 全局单例初始化：服务器启动时检查模型并加载到内存
+    let ai_processor = std::sync::Arc::new(AiProcessor::new(&config).await);
+    let metrics = std::sync::Arc::new(MetricsMonitor::new());
+
     let listener = TcpListener::bind(&addr).await?;
     info!("CyberHub Server (Mac) starting on {}...", addr);
     
-    let metrics = std::sync::Arc::new(MetricsMonitor::new());
-
     loop {
         let (socket, addr) = listener.accept().await?;
         info!("Accepted connection from {}", addr);
         let config_clone = config.clone();
         let metrics_clone = metrics.clone();
+        let ai_clone = ai_processor.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket, config_clone, metrics_clone).await {
+            if let Err(e) = handle_connection(socket, config_clone, metrics_clone, ai_clone).await {
                 error!("Error handling connection from {}: {}", addr, e);
             }
         });
@@ -39,14 +42,14 @@ async fn main() -> Result<()> {
 async fn handle_connection(
     socket: TcpStream, 
     config: AppConfig, 
-    metrics: std::sync::Arc<MetricsMonitor>
+    metrics: std::sync::Arc<MetricsMonitor>,
+    ai_processor: std::sync::Arc<AiProcessor>
 ) -> Result<()> {
     // 实例化核心处理器
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let port = socket.peer_addr().map(|a| a.port()).unwrap_or(0);
     let session_id = format!("{}_{}", timestamp, port);
 
-    let ai_processor = std::sync::Arc::new(AiProcessor::new(&config));
     let mut audio_processor = AudioProcessor::new(&config, session_id.clone());
 
     // 原始 PCM 持续记录文件
