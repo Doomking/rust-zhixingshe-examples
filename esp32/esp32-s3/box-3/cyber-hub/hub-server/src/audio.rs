@@ -15,6 +15,7 @@ pub struct AudioProcessor {
     utterance_count: u32,
     threshold: f64,
     session_id: String,
+    storage_path: String,
     spec: WavSpec,
 }
 
@@ -35,6 +36,7 @@ impl AudioProcessor {
             utterance_count: 0,
             threshold: config.stt_threshold,
             session_id,
+            storage_path: config.audio_storage_path.clone(),
             spec,
         }
     }
@@ -69,7 +71,8 @@ impl AudioProcessor {
                     println!("\x1b[32m[VAD] !!! Voice Detected! (Utterance #{})\x1b[0m", self.utterance_count);
                     
                     let filename = format!("utterance_{}_{}.wav", self.session_id, self.utterance_count);
-                    let mut writer = WavWriter::create(&filename, self.spec)?;
+                    let full_path = std::path::Path::new(&self.storage_path).join(&filename);
+                    let mut writer = WavWriter::create(&full_path, self.spec)?;
                     for &old_sample in self.rolling_buffer.iter() {
                         let _ = writer.write_sample(old_sample);
                     }
@@ -88,7 +91,8 @@ impl AudioProcessor {
                 if let Some(writer) = self.current_utterance.take() {
                     writer.finalize()?;
                     let filename = format!("utterance_{}_{}.wav", self.session_id, self.utterance_count);
-                    finished_utterance = Some(filename);
+                    let full_path = std::path::Path::new(&self.storage_path).join(&filename);
+                    finished_utterance = Some(full_path.to_string_lossy().into_owned());
                     println!("\x1b[33m[VAD] --- End of Speech.\x1b[0m");
                 }
             }

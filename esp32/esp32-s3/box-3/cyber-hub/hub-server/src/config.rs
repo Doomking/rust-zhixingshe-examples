@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub stt_threshold: f64,
     pub stt_model_path: String,
     pub use_internal_stt: bool,
+    pub audio_storage_path: String,
 }
 
 impl AppConfig {
@@ -28,6 +29,7 @@ impl AppConfig {
                 .unwrap_or(800.0),
             stt_model_path: env::var("STT_MODEL_PATH").unwrap_or_else(|_| "models/ggml-medium.bin".to_string()),
             use_internal_stt: env::var("USE_INTERNAL_STT").unwrap_or_else(|_| "true".to_string()) == "true",
+            audio_storage_path: env::var("AUDIO_STORAGE_PATH").unwrap_or_else(|_| "/tmp".to_string()),
         }
     }
 }

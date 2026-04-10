@@ -1,0 +1,17 @@
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+rustflags = ["--cfg", "espidf_time64", "-C", "default-linker-libraries"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32s3"
+ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults"
+# Using global tools to ensure stability and avoid broken local .embuilds
+ESP_IDF_TOOLS_INSTALL_DIR = "global"
+IDF_PYTHON_CHECK_CMDS = "0"

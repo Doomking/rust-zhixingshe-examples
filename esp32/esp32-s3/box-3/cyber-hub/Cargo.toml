@@ -1,6 +1,0 @@
-[workspace]
-members = [
-    "hub-device",
-    "hub-server",
-]
-resolver = "2"
