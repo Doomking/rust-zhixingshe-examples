@@ -1,67 +1,41 @@
-use accelerometer::Accelerometer;
+use esp_idf_svc::hal::i2c::I2cDriver;
+use icm42670::prelude::*;
+use icm42670::{Address, Icm42670};
 use log::*;
-use icm42670::Icm42670;
-use esp_idf_hal::i2c::I2cDriver;
-use std::time::Duration;
 use std::thread;
+use std::sync::{Arc, Mutex};
+use crate::{get_flip_channel, get_status};
 
-pub fn imu_thread(mut imu: Icm42670<I2cDriver<'static>>) {
-    info!("Starting IMU thread...");
-
-    let mut tick = 0u32;
-    let mut is_upright = false;
-
-    let mut upright_count = 0u8;
-    let mut flip_count = 0u8;
+pub fn imu_thread(i2c_bus: Arc<Mutex<I2cDriver<'static>>>) {
+    info!("Starting IMU thread with shared I2C bus...");
 
     loop {
-        // icm42670 0.1.0 uses Accelerometer trait
-        match imu.accel_norm() {
-            Ok(accel) => {
-                let z = accel.z;
-
-                if tick % 20 == 0 {
-                    info!("IMU Z={:.2} | upright={}", z, is_upright);
+        {
+            let mut i2c = match i2c_bus.lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    thread::sleep(std::time::Duration::from_millis(50));
+                    continue;
                 }
-                tick += 1;
+            };
 
-                if z < -0.2 {
-                    if !is_upright {
-                        upright_count += 1;
-                        if upright_count >= 3 {
-                            info!("Device confirmed UPRIGHT. Ready to detect flip.");
-                            is_upright = true;
-                            upright_count = 0;
-                        }
-                    }
-                    flip_count = 0;
-                }
-                else if z > 0.3 {
-                    if is_upright {
-                        flip_count += 1;
-                        if flip_count >= 3 {
-                            info!("FLIP CONFIRMED! Z={:.2} Sending lock_screen...", z);
-
-                            let (tx, _) = crate::get_flip_channel();
-                            if let Ok(sender) = tx.lock() {
-                                let _ = sender.send(true);
+            if let Ok(mut imu) = Icm42670::new(&mut *i2c, Address::Primary) {
+                // Default mode is sufficient for gravity vector check
+                if let Ok(accel) = imu.accel_norm() {
+                    if accel.z < -0.8 {
+                        if let Ok(status) = get_status().read() {
+                            if status.voice_state == 0 {
+                                info!("Screen Flipped! Triggering Wake-up.");
+                                if let Ok(guard) = get_flip_channel().0.lock() {
+                                    let sender: &std::sync::mpsc::Sender<bool> = &*guard;
+                                    let _ = sender.send(true);
+                                }
                             }
-
-                            is_upright = false;
-                            flip_count = 0;
                         }
                     }
-                    upright_count = 0;
-                } else {
-                    upright_count = 0;
-                    flip_count = 0;
                 }
-            }
-            Err(e) => {
-                warn!("IMU Read Failed! Error: {:?}. Retrying...", e);
             }
         }
-
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(std::time::Duration::from_millis(100));
     }
 }

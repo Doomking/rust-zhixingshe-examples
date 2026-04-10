@@ -56,3 +56,4 @@ manga/**/models/
 manga/**/output/
 *.pcm
 *.wav
+**/echokit_box/*

@@ -9,8 +9,6 @@ CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=240
 # Flash and Partition Table (16MB, custom with model partition)
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
-CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="/Users/gustaf/code/rust-zhixingshe-examples/esp32/esp32-s3/box-3/cyber-hub/hub-device-std/partitions.csv"
 
 # SPIRAM and Performance
 CONFIG_SPIRAM=y
