@@ -37,11 +37,6 @@ fn main() -> anyhow::Result<()> {
 
     info!("Cyber-Hub Standard Edition - Booting...");
 
-    // --- 0. Initialize Speech Recognition Models from Partition ---
-    let model_tag = std::ffi::CString::new("model").unwrap();
-    unsafe {
-        esp_idf_svc::sys::esp_sr::esp_srmodel_init(model_tag.as_ptr());
-    }
 
     // --- 1. WiFi Initialization ---
     // let _wifi = connect_wifi(peripherals.modem, sysloop, nvs)?;
@@ -102,7 +97,13 @@ fn main() -> anyhow::Result<()> {
         thread::sleep(std::time::Duration::from_millis(500));
     }
     // --- 4. I2S ---
-    let slot_config = i2s::config::StdSlotConfig::philips_slot_default(i2s::config::DataBitWidth::Bits16, i2s::config::SlotMode::Stereo);
+    // --- 4. I2S (Configured for 32-bit Slot Alignment) ---
+    // Note: We use Bits32 to ensure the clock matches BOX-3 codec requirements.
+    // Audio.rs will handle the conversion back to 16-bit for the AFE engine.
+    let slot_config = i2s::config::StdSlotConfig::philips_slot_default(
+        i2s::config::DataBitWidth::Bits32,
+        i2s::config::SlotMode::Stereo
+    );
     let i2s_config = i2s::config::StdConfig::new(i2s::config::Config::default(), i2s::config::StdClkConfig::from_sample_rate_hz(16000), slot_config, i2s::config::StdGpioConfig::default());
     
     let mut i2s_driver = i2s::I2sDriver::new_std_bidir(
@@ -125,13 +126,22 @@ fn main() -> anyhow::Result<()> {
     thread::spawn(move || weather_thread());
 
     let codec_config = CodecConfig { i2c: i2c0_shared.clone() };
-    ThreadSpawnConfiguration { 
+    // --- 9. Start Audio Engine (on Core 1 to avoid WDT starvation on Core 0) ---
+    // Configuring ThreadSpawn for Audio specifically
+    esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration {
+        name: Some(core::ffi::CStr::from_bytes_with_nul(b"audio-cluster\0").unwrap()),
         stack_size: 30 * 1024,
-        pin_to_core: Some(esp_idf_hal::cpu::Core::Core1), 
-        ..Default::default() 
-    }.set()?;
-    thread::spawn(move || audio_thread(i2s_driver, codec_config));
-    ThreadSpawnConfiguration::default().set()?;
+        priority: 20,
+        pin_to_core: Some(esp_idf_hal::cpu::Core::Core0),
+        ..Default::default()
+    }.set().ok();
+
+    thread::spawn(move || {
+        audio_thread(i2s_driver, codec_config);
+    });
+    
+    // Reset spawn config for other threads
+    esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::default().set().ok();
 
     // --- 6. UI Loop ---
     let mut fb = FrameBuffer::new(320, 240);

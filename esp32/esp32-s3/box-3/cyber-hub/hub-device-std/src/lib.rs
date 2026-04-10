@@ -7,8 +7,6 @@ pub mod tcp;
 pub mod weather;
 pub mod wifi;
 pub mod protocol;
-
-
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 use std::sync::OnceLock;

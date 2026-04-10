@@ -1,3 +1,5 @@
+use esp_idf_hal::cpu::Core;
+use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 use esp_idf_svc::hal::i2c::I2cDriver;
 use esp_idf_svc::hal::i2s::{I2sBiDir, I2sDriver};
 use esp_idf_svc::sys::esp_sr;
@@ -89,16 +91,35 @@ pub fn audio_thread(mut i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecC
     let (feed_tx, feed_rx) = mpsc::sync_channel::<Vec<i16>>(32);
     let (mut i2s_rx, mut i2s_tx) = i2s_driver.split();
 
+    // 1. Initialize Models specifically for this audio pipeline
+    let model_tag = std::ffi::CString::new("model").unwrap();
+    let models = unsafe { esp_sr::esp_srmodel_init(model_tag.as_ptr()) };
+
+    // Safety check: If models fail to load, we can't do WakeNet, but we shouldn't crash.
+    if models.is_null() {
+        error!(
+            "MODEL_LOADER: Failed to load models from partition 'model'. WakeNet will be disabled."
+        );
+    } else {
+        info!("MODEL_LOADER: Successfully load srmodels internally.");
+    }
+
     // AFE Engine Setup
     let afe = unsafe {
-        let format_str = std::ffi::CString::new("MM").unwrap();
+        let format_str = std::ffi::CString::new("M").unwrap(); // Use Single Mic ("M") to avoid Phase Cancellation
         let afe_config_ptr = esp_sr::afe_config_init(
             format_str.as_ptr(),
-            std::ptr::null_mut(),
+            models,
             esp_sr::afe_type_t_AFE_TYPE_SR,
             esp_sr::afe_mode_t_AFE_MODE_HIGH_PERF,
         );
-        let afe_config = afe_config_ptr.as_mut().expect("Failed to init AFE config");
+
+        if afe_config_ptr.is_null() {
+            error!("AFE ERROR: Failed to init AFE config. Retrying initialization without WakeNet if possible...");
+            return; // Exit thread gracefully instead of panicking
+        }
+
+        let afe_config = afe_config_ptr.as_mut().unwrap();
         afe_config.wakenet_init = true;
         afe_config.vad_init = true;
         afe_config.aec_init = false;
@@ -122,17 +143,34 @@ pub fn audio_thread(mut i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecC
     let afe_feed = afe_shared.clone();
     let afe_fetch = afe_shared.clone();
 
-    // Thread 2: AFE Feed Client
+    // --- THREAD 2: AFE FEED ---
+    ThreadSpawnConfiguration {
+        name: Some(core::ffi::CStr::from_bytes_with_nul(b"audio-feed\0").unwrap()),
+        stack_size: 15 * 1024,
+        priority: 15,
+        pin_to_core: Some(Core::Core1),
+        ..Default::default()
+    }.set().ok();
+
     thread::spawn(move || {
         let handle = unsafe { afe_feed.handle.as_ref().unwrap() };
         while let Ok(samples) = feed_rx.recv() {
             unsafe {
                 (handle.feed.unwrap())(afe_feed.data, samples.as_ptr() as *const i16);
             }
+            std::thread::sleep(std::time::Duration::from_millis(5)); // Hardened Yield for WDT
         }
     });
 
-    // Thread 3: AFE Fetch Client
+    // --- THREAD 3: AFE FETCH ---
+    ThreadSpawnConfiguration {
+        name: Some(core::ffi::CStr::from_bytes_with_nul(b"audio-fetch\0").unwrap()),
+        stack_size: 15 * 1024,
+        priority: 15,
+        pin_to_core: Some(Core::Core1),
+        ..Default::default()
+    }.set().ok();
+
     thread::spawn(move || {
         let handle = unsafe { afe_fetch.handle.as_ref().unwrap() };
         let audio_ch = crate::get_audio_channel();
@@ -146,8 +184,8 @@ pub fn audio_thread(mut i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecC
                 if !res_ptr.is_null() {
                     let res = *res_ptr;
 
-                    // --- 1. Wake-word Detection (Trigger) ---
-                    if res.wake_word_index > 0 {
+                    // Interlocked Wakeup: Only trigger if we aren't already in a speech/wakeup session
+                    if res.wake_word_index > 0 && !wakeup_triggered {
                         info!("[AUDIO] WAKEUP DETECTED: ID={}", res.wake_word_index);
                         wakeup_triggered = true;
                         if let Ok(mut status) = crate::get_status().write() {
@@ -168,64 +206,63 @@ pub fn audio_thread(mut i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecC
                             if !speech_active {
                                 speech_active = true;
                                 info!("[AUDIO] SPEECH START");
-                                if let Ok(mut status) = crate::get_status().write() {
-                                    status.last_activity = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs();
-                                }
                             }
-
                             if !res.data.is_null() && res.data_size > 0 {
-                                let slice = std::slice::from_raw_parts(
-                                    res.data as *const u8,
-                                    res.data_size as usize,
-                                );
-                                if let Ok(tx) = audio_ch.0.lock() {
-                                    let _ = tx.send(slice.to_vec());
-                                }
+                                let slice = std::slice::from_raw_parts(res.data as *const u8, res.data_size as usize);
+                                if let Ok(tx) = audio_ch.0.lock() { let _ = tx.send(slice.to_vec()); }
                             }
                         } else if speech_active && !is_speech {
                             speech_active = false;
                             wakeup_triggered = false;
                             info!("[AUDIO] SPEECH END");
-                            if let Ok(mut status) = crate::get_status().write() {
-                                status.voice_state = 0;
-                            }
-                            if let Ok(tx) = voice_ch.0.lock() {
-                                let _ = tx.send(crate::protocol::MSG_VOICE_END as u32);
-                            }
+                            if let Ok(mut status) = crate::get_status().write() { status.voice_state = 0; }
+                            if let Ok(tx) = voice_ch.0.lock() { let _ = tx.send(crate::protocol::MSG_VOICE_END as u32); }
                         }
                     }
                 }
             }
+            std::thread::sleep(std::time::Duration::from_millis(5)); // Hardened Yield for WDT
         }
     });
 
-    // Thread 1: Main I2S Capture
-    let mut i2s_raw_buffer = vec![0i16; chunk_size * 2];
-    let i2s_byte_len = i2s_raw_buffer.len() * 2;
+    // Thread 1: Main I2S Capture (Optimized for 32-bit Slots)
+    let mut i2s_raw_buffer_32 = vec![0i32; chunk_size * 2];
+    let mut i2s_raw_buffer_16 = vec![0i16; chunk_size * 2];
+    let i2s_batch_len = i2s_raw_buffer_32.len() * 4;
     let silence_vec = vec![0i16; chunk_size * 2];
 
     let mut log_count = 0;
     loop {
         let silence_u8 =
-            unsafe { std::slice::from_raw_parts(silence_vec.as_ptr() as *const u8, i2s_byte_len) };
+            unsafe { std::slice::from_raw_parts(silence_vec.as_ptr() as *const u8, chunk_size * 4) };
         let _ = i2s_tx.write(silence_u8, 10);
 
         let i2s_byte_slice = unsafe {
-            std::slice::from_raw_parts_mut(i2s_raw_buffer.as_mut_ptr() as *mut u8, i2s_byte_len)
+            std::slice::from_raw_parts_mut(i2s_raw_buffer_32.as_mut_ptr() as *mut u8, i2s_batch_len)
         };
+        
         if let Ok(n) = i2s_rx.read(i2s_byte_slice, 1000) {
-            if n == i2s_byte_len {
-                let _peak = i2s_raw_buffer.iter().map(|&s| s.abs()).max().unwrap_or(0);
+            if n == i2s_batch_len {
+                // Final Precision Extraction for Single-Mic ("M") mode
+                // Shift by 10 to balance sensitivity and noise floor for wn9 model
+                for i in 0..chunk_size {
+                    i2s_raw_buffer_16[i] = (i2s_raw_buffer_32[i * 2] >> 10) as i16;
+                }
+
+                // Peak check on the active 512 samples
+                let peak_16 = i2s_raw_buffer_16[0..chunk_size].iter().map(|&s| s.abs()).max().unwrap_or(0);
                 log_count += 1;
-                if log_count >= 50 {
-                    // info!("🎤 AUDIO CHECK - PEAK: {}", peak);
+                if log_count >= 100 {
+                    info!("🎤 AUDIO CHECK (1-MIC) - PEAK: {}", peak_16);
                     log_count = 0;
                 }
-                let _ = feed_tx.try_send(i2s_raw_buffer.clone());
+                
+                // Feed only the 512 mono samples to the AFE engine
+                let _ = feed_tx.try_send(i2s_raw_buffer_16[0..chunk_size].to_vec());
+            } else {
+                warn!("⚠️ I2S READ MISMATCH: got {}, expected {}", n, i2s_batch_len);
             }
         }
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
