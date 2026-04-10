@@ -66,7 +66,12 @@ async fn handle_connection(
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             let (cpu, mem) = metrics.get_usage().await;
-            let packet = [0x01u8, cpu, mem, 0x00u8]; // Standard heartbeat
+            // Unified 0x5A Packet: [Magic, Type, LenL, LenH, CPU, MEM]
+            let packet = [
+                hub_server::protocol::MAGIC_HEADER, 
+                hub_server::protocol::MSG_METRICS, 
+                0x02, 0x00, cpu, mem
+            ];
             if let Err(e) = wr.write_all(&packet).await {
                 warn!("Metrics send failed: {}", e);
                 break;
@@ -88,8 +93,8 @@ async fn handle_connection(
         leftover.extend_from_slice(&buffer[..n]);
 
         while leftover.len() >= 4 {
-            // Find Magic Byte 0x5A
-            if leftover[0] != 0x5A {
+            // Find Magic Byte
+            if leftover[0] != hub_server::protocol::MAGIC_HEADER {
                 leftover.remove(0);
                 continue;
             }
@@ -106,17 +111,19 @@ async fn handle_connection(
             let payload = &packet_data[4..];
 
             match msg_type {
-                0x01 => { // Metrics
-                    // Already handled by device, can log here for debug
+                hub_server::protocol::MSG_METRICS => { // Metrics
+                    // Handled locally
                 }
-                0x0F => { // Flip Event
+                hub_server::protocol::MSG_FLIP_EVENT => { // Flip Event
                     info!("\x1b[31;1m[PKT] Lock Screen Command Received!\x1b[0m");
                     trigger_macos_lock();
                 }
-                0x10 => { // Wakeup Start
+                hub_server::protocol::MSG_VOICE_START => { // Wakeup Start
                     info!("\x1b[32;1m[PKT] Voice Wakeup Detected!\x1b[0m");
+                    ai_processor.notify_wakeup(); // Authorize the upcoming session
+                    audio_processor.start_manual_session()?;
                 }
-                0x11 => { // Audio Chunk
+                hub_server::protocol::MSG_VOICE_DATA => { // Audio Chunk
                     // Only process audio if payload exists
                     if !payload.is_empty() {
                         if let Some(wav_path) = audio_processor.process_data(payload)? {
@@ -130,8 +137,16 @@ async fn handle_connection(
                         file.write_all(payload).await?;
                     }
                 }
-                0x12 => { // Voice End
+                hub_server::protocol::MSG_VOICE_END => { // Voice End
                     info!("[PKT] Voice Session End");
+                    if let Some(wav_path) = audio_processor.stop_manual_session()? {
+                        let ai_ptr = ai_processor.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = ai_ptr.process_utterance(wav_path).await {
+                                error!("AI Processing Error: {}", e);
+                            }
+                        });
+                    }
                 }
                 _ => {
                     warn!("[PKT] Unknown type 0x{:02X}", msg_type);

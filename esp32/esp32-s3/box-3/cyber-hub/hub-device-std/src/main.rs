@@ -11,7 +11,7 @@ use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 use esp_idf_hal::units::FromValueType;
 use esp_idf_svc::sntp::EspSntp;
 use esp_idf_svc::sntp::SyncStatus;
-use mipidsi::options::{Orientation, Rotation, ColorInversion};
+use mipidsi::options::{Orientation, Rotation};
 use log::*;
 use std::thread;
 use std::time::SystemTime;
@@ -36,6 +36,12 @@ fn main() -> anyhow::Result<()> {
     let nvs = esp_idf_svc::nvs::EspDefaultNvsPartition::take()?;
 
     info!("Cyber-Hub Standard Edition - Booting...");
+
+    // --- 0. Initialize Speech Recognition Models from Partition ---
+    let model_tag = std::ffi::CString::new("model").unwrap();
+    unsafe {
+        esp_idf_svc::sys::esp_sr::esp_srmodel_init(model_tag.as_ptr());
+    }
 
     // --- 1. WiFi Initialization ---
     // let _wifi = connect_wifi(peripherals.modem, sysloop, nvs)?;

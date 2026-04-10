@@ -1,14 +1,17 @@
 pub mod downloader;
 pub mod local_stt;
 
-use anyhow::Result;
-use async_openai::Client;
-use async_openai::config::OpenAIConfig;
-use async_openai::types::{CreateTranscriptionRequestArgs, CreateChatCompletionRequestArgs, ChatCompletionRequestUserMessageArgs};
-use tracing::{info, warn, error};
-use crate::config::AppConfig;
-use self::local_stt::LocalStt;
 use self::downloader::download_model_if_needed;
+use self::local_stt::LocalStt;
+use crate::config::AppConfig;
+use anyhow::Result;
+use async_openai::config::OpenAIConfig;
+use async_openai::types::{
+    ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
+    CreateTranscriptionRequestArgs,
+};
+use async_openai::Client;
+use tracing::{error, info, warn};
 
 pub struct AiProcessor {
     stt_client: Client<OpenAIConfig>,
@@ -33,13 +36,19 @@ impl AiProcessor {
 
         let local_stt = if config.use_internal_stt {
             if let Err(e) = download_model_if_needed(&config.stt_model_path).await {
-                error!("[AI] Failed to download/check model: {}. Falling back to API mode.", e);
+                error!(
+                    "[AI] Failed to download/check model: {}. Falling back to API mode.",
+                    e
+                );
                 None
             } else {
                 match LocalStt::new(&config.stt_model_path) {
                     Ok(stt) => Some(std::sync::Arc::new(stt)),
                     Err(e) => {
-                        error!("[AI] Failed to initialize local STT: {}. Falling back to API mode.", e);
+                        error!(
+                            "[AI] Failed to initialize local STT: {}. Falling back to API mode.",
+                            e
+                        );
                         None
                     }
                 }
@@ -56,6 +65,11 @@ impl AiProcessor {
             use_internal: config.use_internal_stt,
             last_wake_time: std::sync::Mutex::new(None),
         }
+    }
+    pub fn notify_wakeup(&self) {
+        let mut last_wake = self.last_wake_time.lock().unwrap();
+        *last_wake = Some(std::time::Instant::now());
+        info!("\x1b[32;1m[WAKE] Hardware-triggered wakeup authorized.\x1b[0m");
     }
 
     pub async fn process_utterance(&self, wav_path: String) -> Result<()> {
@@ -90,7 +104,9 @@ impl AiProcessor {
             if let Some(pos) = text.to_lowercase().find(kw) {
                 wake_word_found = true;
                 let raw_cmd = &text[pos + kw.len()..];
-                command = raw_cmd.trim_start_matches(|c: char| ",，。 ".contains(c)).to_string();
+                command = raw_cmd
+                    .trim_start_matches(|c: char| ",，。 ".contains(c))
+                    .to_string();
                 break;
             }
         }
@@ -102,11 +118,14 @@ impl AiProcessor {
                 if chars[i] == '小' && XIAO_ZHI_CHARS.contains(chars[i + 1]) {
                     wake_word_found = true;
                     // 提取唤醒词之后的指令部分
-                    let byte_pos: usize = text.char_indices()
+                    let byte_pos: usize = text
+                        .char_indices()
                         .nth(i + 2)
                         .map(|(b, _)| b)
                         .unwrap_or(text.len());
-                    command = text[byte_pos..].trim_start_matches(|c: char| ",，。 ".contains(c)).to_string();
+                    command = text[byte_pos..]
+                        .trim_start_matches(|c: char| ",，。 ".contains(c))
+                        .to_string();
                     break;
                 }
             }
@@ -116,7 +135,7 @@ impl AiProcessor {
         let final_command: String = {
             let now = std::time::Instant::now();
             let mut last_wake = self.last_wake_time.lock().unwrap();
-            
+
             let is_in_window = if let Some(t) = *last_wake {
                 now.duration_since(t) < std::time::Duration::from_secs(8)
             } else {
@@ -139,7 +158,10 @@ impl AiProcessor {
             }
         }; // 这里 guard 会被自动 drop
 
-        info!("\x1b[32;1m[WAKE] Command accepted: \"{}\"\x1b[0m", final_command);
+        info!(
+            "\x1b[32;1m[WAKE] Command accepted: \"{}\"\x1b[0m",
+            final_command
+        );
 
         // 4. 优先尝试本地指令路由（无网络延迟）
         if Self::try_local_command(&final_command) {
@@ -178,21 +200,27 @@ impl AiProcessor {
         use crate::system::control;
 
         // ── 锁屏 ──────────────────────────────────────────────────────────────
-        if command.contains("锁屏") || command.contains("锁定屏幕") || command.contains("lock screen") {
+        if command.contains("锁屏")
+            || command.contains("锁定屏幕")
+            || command.contains("lock screen")
+        {
             info!("[LOCAL] → lock_screen");
             control::trigger_macos_lock();
             return true;
         }
 
         // ── 静音 / 取消静音（优先检查，防止被音量逻辑截断）────────────────────
-        if command.contains("取消静音") || command.contains("解除静音")
-            || command.contains("打开声音") || command.contains("恢复声音")
+        if command.contains("取消静音")
+            || command.contains("解除静音")
+            || command.contains("打开声音")
+            || command.contains("恢复声音")
         {
             info!("[LOCAL] → unmute");
             control::unmute();
             return true;
         }
-        if command.contains("静音") || command.contains("关掉声音") || command.contains("关闭声音") {
+        if command.contains("静音") || command.contains("关掉声音") || command.contains("关闭声音")
+        {
             info!("[LOCAL] → mute");
             control::mute();
             return true;
@@ -201,7 +229,7 @@ impl AiProcessor {
         // ── 音量控制（语义分解：主体词 + 方向词，处理"音量再调小一点"等自然说法）──
         let has_volume_subject = command.contains("音量") || command.contains("声音");
         if has_volume_subject {
-            let up_words   = ["大", "高", "加", "升", "响"];
+            let up_words = ["大", "高", "加", "升", "响"];
             let down_words = ["小", "低", "减", "降", "轻"];
             if up_words.iter().any(|w| command.contains(w)) {
                 info!("[LOCAL] → volume_up");

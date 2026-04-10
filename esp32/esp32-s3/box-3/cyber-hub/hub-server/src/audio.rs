@@ -53,30 +53,18 @@ impl AudioProcessor {
             self.rolling_buffer.push_back(sample);
         }
 
-        let mut sum_sq = 0f64;
-        for &sample in &samples {
-            sum_sq += (sample as f64) * (sample as f64);
-        }
-
         let mut finished_utterance = None;
 
         if !samples.is_empty() {
-            let rms = (sum_sq / samples.len() as f64).sqrt();
-            
-            if rms > self.threshold {
-                self.last_activity = Instant::now();
-                if !self.is_speaking {
-                    self.is_speaking = true;
-                    self.utterance_count += 1;
-                    println!("\x1b[32m[VAD] !!! Voice Detected! (Utterance #{})\x1b[0m", self.utterance_count);
-                    
-                    let filename = format!("utterance_{}_{}.wav", self.session_id, self.utterance_count);
-                    let full_path = std::path::Path::new(&self.storage_path).join(&filename);
-                    let mut writer = WavWriter::create(&full_path, self.spec)?;
-                    for &old_sample in self.rolling_buffer.iter() {
-                        let _ = writer.write_sample(old_sample);
-                    }
-                    self.current_utterance = Some(writer);
+            // If already speaking (triggered by 0x10), we skip RMS check and just write
+            if !self.is_speaking {
+                let mut sum_sq = 0f64;
+                for &sample in &samples {
+                    sum_sq += (sample as f64) * (sample as f64);
+                }
+                let rms = (sum_sq / samples.len() as f64).sqrt();
+                if rms > self.threshold {
+                    self.start_manual_session()?;
                 }
             }
 
@@ -86,18 +74,44 @@ impl AudioProcessor {
                 }
             }
 
-            if self.is_speaking && self.last_activity.elapsed().as_millis() > 1000 {
-                self.is_speaking = false;
-                if let Some(writer) = self.current_utterance.take() {
-                    writer.finalize()?;
-                    let filename = format!("utterance_{}_{}.wav", self.session_id, self.utterance_count);
-                    let full_path = std::path::Path::new(&self.storage_path).join(&filename);
-                    finished_utterance = Some(full_path.to_string_lossy().into_owned());
-                    println!("\x1b[33m[VAD] --- End of Speech.\x1b[0m");
-                }
+            // In manual mode, we rely on 0x12 to stop. 
+            // The 1000ms timeout is kept as a fallback if 0x12 is lost.
+            if self.is_speaking && self.last_activity.elapsed().as_millis() > 3000 {
+                finished_utterance = self.stop_manual_session()?;
             }
         }
 
         Ok(finished_utterance)
+    }
+
+    pub fn start_manual_session(&mut self) -> Result<()> {
+        if self.is_speaking { return Ok(()); }
+        self.is_speaking = true;
+        self.last_activity = Instant::now();
+        self.utterance_count += 1;
+        info!("\x1b[32m[VAD] !!! Voice Session Started (Device Triggered)\x1b[0m");
+
+        let filename = format!("utterance_{}_{}.wav", self.session_id, self.utterance_count);
+        let full_path = std::path::Path::new(&self.storage_path).join(&filename);
+        let mut writer = WavWriter::create(&full_path, self.spec)?;
+        for &old_sample in self.rolling_buffer.iter() {
+            let _ = writer.write_sample(old_sample);
+        }
+        self.current_utterance = Some(writer);
+        Ok(())
+    }
+
+    pub fn stop_manual_session(&mut self) -> Result<Option<String>> {
+        if !self.is_speaking { return Ok(None); }
+        self.is_speaking = false;
+        if let Some(writer) = self.current_utterance.take() {
+            writer.finalize()?;
+            let filename = format!("utterance_{}_{}.wav", self.session_id, self.utterance_count);
+            let full_path = std::path::Path::new(&self.storage_path).join(&filename);
+            info!("\x1b[33m[VAD] --- Session Finalized.\x1b[0m");
+            Ok(Some(full_path.to_string_lossy().into_owned()))
+        } else {
+            Ok(None)
+        }
     }
 }
