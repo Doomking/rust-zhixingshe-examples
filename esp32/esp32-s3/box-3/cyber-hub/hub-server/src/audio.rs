@@ -1,11 +1,11 @@
+use crate::config::AppConfig;
 use anyhow::Result;
-use hound::{WavWriter, WavSpec};
+use hound::{WavSpec, WavWriter};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
 use std::time::Instant;
 use tracing::info;
-use crate::config::AppConfig;
 
 pub struct AudioProcessor {
     is_speaking: bool,
@@ -22,7 +22,7 @@ pub struct AudioProcessor {
 impl AudioProcessor {
     pub fn new(config: &AppConfig, session_id: String) -> Self {
         let spec = WavSpec {
-            channels: 2,
+            channels: 1,
             sample_rate: 16000,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
@@ -46,7 +46,7 @@ impl AudioProcessor {
         for chunk in data.chunks_exact(2) {
             let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
             samples.push(sample);
-            
+
             if self.rolling_buffer.len() >= self.rolling_buffer.capacity() {
                 self.rolling_buffer.pop_front();
             }
@@ -74,7 +74,7 @@ impl AudioProcessor {
                 }
             }
 
-            // In manual mode, we rely on 0x12 to stop. 
+            // In manual mode, we rely on 0x12 to stop.
             // The 1000ms timeout is kept as a fallback if 0x12 is lost.
             if self.is_speaking && self.last_activity.elapsed().as_millis() > 3000 {
                 finished_utterance = self.stop_manual_session()?;
@@ -85,7 +85,9 @@ impl AudioProcessor {
     }
 
     pub fn start_manual_session(&mut self) -> Result<()> {
-        if self.is_speaking { return Ok(()); }
+        if self.is_speaking {
+            return Ok(());
+        }
         self.is_speaking = true;
         self.last_activity = Instant::now();
         self.utterance_count += 1;
@@ -102,7 +104,9 @@ impl AudioProcessor {
     }
 
     pub fn stop_manual_session(&mut self) -> Result<Option<String>> {
-        if !self.is_speaking { return Ok(None); }
+        if !self.is_speaking {
+            return Ok(None);
+        }
         self.is_speaking = false;
         if let Some(writer) = self.current_utterance.take() {
             writer.finalize()?;

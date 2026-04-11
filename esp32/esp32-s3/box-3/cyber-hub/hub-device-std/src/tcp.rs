@@ -30,7 +30,7 @@ pub fn tcp_thread() {
                     // 1. Check if we need to send audio data
                     if let Ok(rx_guard) = audio_ch.1.lock() {
                         while let Ok(pcm_vec) = rx_guard.try_recv() {
-                            let mut header = [0x5A, 0x11, 0, 0];
+                            let mut header = [crate::protocol::MAGIC_HEADER, crate::protocol::MSG_VOICE_DATA, 0, 0];
                             let len = (pcm_vec.len() as u16).to_le_bytes();
                             header[2..4].copy_from_slice(&len);
                             write_res = stream.write_all(&header).and_then(|_| stream.write_all(&pcm_vec));
@@ -42,18 +42,18 @@ pub fn tcp_thread() {
                     if write_res.is_ok() {
                         if let Ok(rx_guard) = voice_ch.1.lock() {
                             while let Ok(e) = rx_guard.try_recv() {
-                                let header = [0x5A, e as u8, 0, 0];
+                                let header = [crate::protocol::MAGIC_HEADER, e as u8, 0, 0];
                                 write_res = stream.write_all(&header);
                                 if write_res.is_err() { break; }
                             }
                         }
                     }
 
-                    // 3. Check for flip events (0x0F)
+                    // 3. Check for flip events
                     if write_res.is_ok() {
                         if let Ok(rx_guard) = flip_ch.1.lock() {
                             while let Ok(_) = rx_guard.try_recv() {
-                                let header = [0x5A, 0x0F, 0, 0];
+                                let header = [crate::protocol::MAGIC_HEADER, crate::protocol::MSG_FLIP_EVENT, 0, 0];
                                 write_res = stream.write_all(&header);
                                 if write_res.is_err() { break; }
                             }
@@ -65,15 +65,21 @@ pub fn tcp_thread() {
                         break;
                     }
 
-                    // 4. Try to read heartbeats (Type 0x01)
-                    let mut buffer = [0u8; 4];
+                    // 4. Try to read heartbeats/metrics from server
+                    let mut buffer = [0u8; 6];
                     if let Ok(n) = stream.read(&mut buffer) {
-                        if n == 4 && buffer[0] == 0x01 {
-                            // Update system metrics if needed
+                        if n == 6 && buffer[0] == crate::protocol::MAGIC_HEADER && buffer[1] == crate::protocol::MSG_METRICS {
+                            // Update system metrics: [Magic, Type, LenL, LenH, CPU, MEM]
+                            let cpu = buffer[4];
+                            let mem = buffer[5];
+                            if let Ok(mut status) = crate::get_status().write() {
+                                status.cpu_usage = cpu;
+                                status.mem_usage = mem;
+                            }
                         }
                     }
 
-                    thread::sleep(std::time::Duration::from_millis(5));
+                    thread::sleep(std::time::Duration::from_millis(10));
                 }
             }
             Err(e) => {
