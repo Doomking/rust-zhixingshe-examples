@@ -105,30 +105,32 @@ fn main() -> anyhow::Result<()> {
         }
         thread::sleep(std::time::Duration::from_millis(500));
     }
-    // --- 4. I2S (Corrected for S3-BOX-3 Physical Layout) ---
+    // --- 4. I2S Std Philips Stereo, 16-bit slots (avoids Mono BCLK halving; audio.rs extracts L ch) ---
     let slot_config = i2s::config::StdSlotConfig::philips_slot_default(
         i2s::config::DataBitWidth::Bits16,
         i2s::config::SlotMode::Stereo,
     )
     .slot_bit_width(i2s::config::SlotBitWidth::Bits16);
-    // 明确要求输出 256 倍采样率的 MCLK (16000 * 256 = 4.096MHz)，这是 ES7210 必须的
     let clk_config = i2s::config::StdClkConfig::from_sample_rate_hz(16000)
         .mclk_multiple(i2s::config::MclkMultiple::M256);
+    let channel_config = i2s::config::Config::default()
+        .auto_clear(true)
+        .dma_buffer_count(6)
+        .frames_per_buffer(512);
     let i2s_config = i2s::config::StdConfig::new(
-        i2s::config::Config::default(),
+        channel_config,
         clk_config,
         slot_config,
         i2s::config::StdGpioConfig::default(),
     );
-
     let mut i2s_driver = i2s::I2sDriver::new_std_bidir(
         peripherals.i2s0,
         &i2s_config,
-        pins.gpio17,      // bclk (恢复正确)
-        pins.gpio16,      // din (恢复正确)
-        pins.gpio15,      // dout (恢复正确)
-        Some(pins.gpio2), // mclk (保留这个救命时钟)
-        pins.gpio45,      // ws (恢复正确)
+        pins.gpio17,      // bclk
+        pins.gpio16,      // din
+        pins.gpio15,      // dout
+        Some(pins.gpio2), // mclk
+        pins.gpio45,      // ws
     )?;
     i2s_driver.tx_enable()?;
     i2s_driver.rx_enable()?;

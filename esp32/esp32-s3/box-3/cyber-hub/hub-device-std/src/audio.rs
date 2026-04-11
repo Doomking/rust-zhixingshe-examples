@@ -20,27 +20,71 @@ unsafe impl Send for AfeInstance {}
 unsafe impl Sync for AfeInstance {} // Required for Arc sharing
 
 pub fn es7210_init(i2c: &mut I2cDriver<'static>) -> anyhow::Result<()> {
-    info!("ES7210: Initializing codec input (aligned with verified no-std hub-device)...");
+    info!("ES7210: Initializing codec input (aligned with official espressif driver, 16-bit I2S, 256fs/16kHz)...");
 
-    let mut write = |reg, val| i2c.write(0x40, &[reg, val], 100);
+    let mut write = |reg: u8, val: u8| -> anyhow::Result<()> {
+        i2c.write(0x40, &[reg, val], 100)?;
+        Ok(())
+    };
 
-    write(0x01, 0x20)?; write(0x03, 0x10)?;
-    write(0x04, 0x01)?; write(0x06, 0x00)?;
-    write(0x08, 0x00)?; write(0x09, 0x20)?;
-    write(0x0a, 0x02)?; write(0x0b, 0x01)?;
-    write(0x0e, 0x00)?; write(0x0f, 0x00)?;
-    write(0x10, 0x00)?; write(0x11, 0x00)?;
-    write(0x12, 0x00)?; write(0x13, 0x00)?;
-    write(0x14, 0x00)?; write(0x15, 0x00)?;
-    write(0x16, 0x00)?; write(0x17, 0x00)?;
-    write(0x18, 0x00)?; write(0x19, 0x00)?;
-    write(0x20, 0x11)?; write(0x21, 0x10)?;
-    write(0x22, 0x10)?; write(0x23, 0x10)?;
-    write(0x40, 0x42)?; write(0x41, 0x70)?;
-    write(0x42, 0x70)?; write(0x43, 0x1b)?;
-    write(0x07, 0x00)?;
+    // 1. Software reset
+    write(0x00, 0xFF)?;
+    write(0x00, 0x32)?;
 
-    info!("ES7210: Ready.");
+    // 2. Power-up initialization timing (official: 0x30 for both)
+    write(0x09, 0x30)?;
+    write(0x0A, 0x30)?;
+
+    // 3. HPF configuration for ADC1-4 (official values)
+    write(0x23, 0x2A)?;
+    write(0x22, 0x0A)?;
+    write(0x21, 0x2A)?;
+    write(0x20, 0x0A)?;
+
+    // 4. I2S format: standard I2S (0x00) + 16-bit (0x60) = 0x60
+    //    CRITICAL FIX: was 0x00 (=24-bit!), now 0x60 (=16-bit)
+    write(0x11, 0x60)?;
+    // Non-TDM mode (standard I2S, 2ch on SDOUT1)
+    write(0x12, 0x00)?;
+
+    // 5. Analog power + VMID
+    write(0x40, 0xC3)?;
+
+    // 6. MIC1-2 bias = 2.87V, MIC3-4 bias = 2.87V
+    write(0x41, 0x70)?;
+    write(0x42, 0x70)?;
+
+    // 7. MIC1-4 gain = ~30dB (0x1B | 0x10 = 0x1B per official pattern)
+    write(0x43, 0x1B)?;
+    write(0x44, 0x1B)?;
+    write(0x45, 0x1B)?;
+    write(0x46, 0x1B)?;
+
+    // 8. Power on MIC1-4
+    write(0x47, 0x08)?;
+    write(0x48, 0x08)?;
+    write(0x49, 0x08)?;
+    write(0x4A, 0x08)?;
+
+    // 9. Clock config for 256fs @ 16kHz (MCLK=4.096MHz)
+    //    from coeff table: adc_div=1, dll=1, doubler=1, osr=0x20
+    write(0x07, 0x20)?;  // OSR (was 0x00 — wrong!)
+    write(0x02, 0xC1)?;  // MAINCLK: adc_div=1 | doubler<<6 | dll<<7 = 0x01|0x40|0x80
+    write(0x04, 0x01)?;  // LRCK_DIVH
+    write(0x05, 0x00)?;  // LRCK_DIVL
+
+    // 10. Power down DLL (official sequence)
+    write(0x06, 0x04)?;
+
+    // 11. Power on MIC1-2 bias & ADC1-2 & PGA1-2
+    write(0x4B, 0x0F)?;
+    write(0x4C, 0x0F)?;
+
+    // 12. Enable device
+    write(0x00, 0x71)?;
+    write(0x00, 0x41)?;
+
+    info!("ES7210: Ready (16-bit I2S, 256fs, non-TDM).");
     Ok(())
 }
 
@@ -64,23 +108,21 @@ pub fn es8311_init(i2c: &mut I2cDriver<'static>) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn audio_thread(mut i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecConfig) {
+pub fn audio_thread(i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecConfig) {
     info!("Audio Engine: Using 3-thread decoupled pipeline with library state.");
 
+    let i2s_driver = Box::leak(Box::new(i2s_driver));
     let (mut i2s_rx, mut i2s_tx) = i2s_driver.split();
 
-    // I2S warm-up: get BCLK/WS running before codec I2C init (matches no-std hub-device order).
-    const WARMUP_CHUNK: usize = 512;
-    let mut warmup_buf = vec![0i16; WARMUP_CHUNK * 2];
-    let warmup_silence = vec![0u8; WARMUP_CHUNK * 4];
+    // I2S warm-up: Stereo 16-bit (2 bytes/sample × 2 channels × 512 frames).
+    const WARMUP_FRAMES: usize = 512;
+    let mut warmup_buf = vec![0u8; WARMUP_FRAMES * 2 * 2];
+    let warmup_silence = vec![0u8; WARMUP_FRAMES * 2 * 2];
     const WARMUP_ITERATIONS: u32 = 24;
-    info!("[AUDIO] I2S warm-up ({} iters) before codec I2C init", WARMUP_ITERATIONS);
+    info!("[AUDIO] I2S warm-up ({} iters, Stereo 16-bit) before codec I2C init", WARMUP_ITERATIONS);
     for _ in 0..WARMUP_ITERATIONS {
         let _ = i2s_tx.write(&warmup_silence, 10);
-        let wb = unsafe {
-            std::slice::from_raw_parts_mut(warmup_buf.as_mut_ptr() as *mut u8, WARMUP_CHUNK * 4)
-        };
-        let _ = i2s_rx.read(wb, 1000);
+        let _ = i2s_rx.read(&mut warmup_buf, 1000);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
@@ -161,10 +203,9 @@ pub fn audio_thread(mut i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecC
             warn!("[AFE] enable_wakenet not available in this ESP-SR version");
         }
 
-        // Lower threshold for diagnostic — makes WakeNet much more sensitive
         if let Some(f) = handle.set_wakenet_threshold {
-            let ret = f(afe.data, 1, 0.4);
-            info!("[AFE] set_wakenet_threshold(index=1, thresh=0.4) returned {} (-1=fail, 1=ok)", ret);
+            let ret = f(afe.data, 1, 0.2);
+            info!("[AFE] set_wakenet_threshold(index=1, thresh=0.2) returned {} (-1=fail, 1=ok)", ret);
         }
 
         if let Some(f) = handle.enable_agc {
@@ -278,7 +319,6 @@ pub fn audio_thread(mut i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecC
             unsafe {
                 let res_ptr = (handle.fetch.unwrap())(afe_fetch.data);
                 if res_ptr.is_null() {
-                    warn!("[AFE-FETCH] fetch() returned null");
                     continue;
                 }
                 let res = *res_ptr;
@@ -379,72 +419,91 @@ pub fn audio_thread(mut i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecC
         }
     });
 
-    // Thread 1: Main I2S Capture (uses dynamic chunk_size from AFE)
-    let mut i2s_raw_buffer_16 = vec![0i16; chunk_size * 2]; // stereo: L+R interleaved
-    let i2s_batch_len = i2s_raw_buffer_16.len() * 2; // in bytes
-    let silence_vec = vec![0i16; chunk_size * 2];
+    // --- Main I2S capture: Stereo read → extract L channel → DC removal → AFE feed ---
+    let stereo_samples = chunk_size * 2;
+    let mut stereo_buf = vec![0i16; stereo_samples];
+    let read_len_bytes = stereo_samples * std::mem::size_of::<i16>();
+    let silence_u8 = vec![0u8; read_len_bytes];
+    let mut mono_for_afe = vec![0i16; chunk_size];
     let mut log_count: u32 = 0;
     let mut drop_count: u64 = 0;
 
     info!(
-        "[I2S] Capture loop started: chunk_size={}, stereo_buf={}i16, batch={}B",
-        chunk_size,
-        i2s_raw_buffer_16.len(),
-        i2s_batch_len
+        "[I2S] Stereo 16-bit read → L-ch extract → DC removal → AFE: chunk_size={}, stereo_bytes={}",
+        chunk_size, read_len_bytes
     );
 
     loop {
-        let silence_u8 = unsafe {
-            std::slice::from_raw_parts(silence_vec.as_ptr() as *const u8, chunk_size * 4)
-        };
-        let _ = i2s_tx.write(silence_u8, 10);
+        let _ = i2s_tx.write(&silence_u8, 50);
 
-        let i2s_byte_slice = unsafe {
-            std::slice::from_raw_parts_mut(i2s_raw_buffer_16.as_mut_ptr() as *mut u8, i2s_batch_len)
+        let read_buf_u8 = unsafe {
+            std::slice::from_raw_parts_mut(
+                stereo_buf.as_mut_ptr() as *mut u8,
+                read_len_bytes,
+            )
         };
 
-        if let Ok(n) = i2s_rx.read(i2s_byte_slice, 1000) {
-            if n == i2s_batch_len {
-                // One-time dump of raw I2S buffer (before L/R separation)
+        if let Ok(n) = i2s_rx.read(read_buf_u8, 50) {
+            if n == read_len_bytes {
                 log_count += 1;
-                if log_count == 1 {
-                    let r = &i2s_raw_buffer_16;
+
+                // Raw stereo diagnostic (before any processing)
+                if log_count <= 5 || log_count % 500 == 0 {
+                    let raw_nz = stereo_buf.iter().filter(|&&v| v != 0).count();
+                    // Collect first 10 non-zero positions to reveal the spacing pattern
+                    let mut nz_positions = Vec::with_capacity(10);
+                    for (idx, &v) in stereo_buf.iter().enumerate() {
+                        if v != 0 {
+                            nz_positions.push(idx);
+                            if nz_positions.len() >= 10 { break; }
+                        }
+                    }
                     info!(
-                        "[I2S-RAW] first 32 i16: [{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}]",
-                        r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7],
-                        r[8],r[9],r[10],r[11],r[12],r[13],r[14],r[15],
-                        r[16],r[17],r[18],r[19],r[20],r[21],r[22],r[23],
-                        r[24],r[25],r[26],r[27],r[28],r[29],r[30],r[31],
+                        "[RAW-STEREO] #{}: {} i16, non_zero={}/{}, first16=[{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}], nz_pos={:?}",
+                        log_count, stereo_samples, raw_nz, stereo_samples,
+                        stereo_buf[0], stereo_buf[1], stereo_buf[2], stereo_buf[3],
+                        stereo_buf[4], stereo_buf[5], stereo_buf[6], stereo_buf[7],
+                        stereo_buf[8], stereo_buf[9], stereo_buf[10], stereo_buf[11],
+                        stereo_buf[12], stereo_buf[13], stereo_buf[14], stereo_buf[15],
+                        nz_positions,
                     );
                 }
 
-                let mut mono_buf = vec![0i16; chunk_size];
-                let mut peak_l: i16 = 0;
-                let mut peak_r: i16 = 0;
-
+                // Extract left channel: stereo interleaved [L0, R0, L1, R1, ...] → [L0, L1, ...]
                 for i in 0..chunk_size {
-                    let l = i2s_raw_buffer_16[i * 2];
-                    let r = i2s_raw_buffer_16[i * 2 + 1];
-                    peak_l = peak_l.max(l.abs());
-                    peak_r = peak_r.max(r.abs());
-                    mono_buf[i] = l;
+                    mono_for_afe[i] = stereo_buf[i * 2];
                 }
 
-                if log_count >= 100 {
-                    info!("🎤 AUDIO PEAK - L: {}, R: {}", peak_l, peak_r);
-                    log_count = 0;
+                // DC removal on mono
+                let dc: i32 = mono_for_afe.iter().map(|&s| s as i32).sum::<i32>() / chunk_size as i32;
+                if dc != 0 {
+                    for s in mono_for_afe.iter_mut() {
+                        *s = (*s as i32 - dc).clamp(-32768, 32767) as i16;
+                    }
                 }
 
-                if let Err(_) = feed_tx.try_send(mono_buf) {
+                if log_count <= 5 || log_count % 500 == 0 {
+                    let peak = mono_for_afe.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+                    let min_val = mono_for_afe.iter().copied().min().unwrap_or(0);
+                    let max_val = mono_for_afe.iter().copied().max().unwrap_or(0);
+                    let nz = mono_for_afe.iter().filter(|&&v| v != 0).count();
+                    info!(
+                        "[I2S→AFE] #{}: dc={}, peak={}, min={}, max={}, non_zero={}/{}, first8=[{},{},{},{},{},{},{},{}]",
+                        log_count, dc, peak, min_val, max_val, nz, chunk_size,
+                        mono_for_afe[0], mono_for_afe[1], mono_for_afe[2], mono_for_afe[3],
+                        mono_for_afe[4], mono_for_afe[5], mono_for_afe[6], mono_for_afe[7],
+                    );
+                }
+
+                if let Err(_) = feed_tx.try_send(mono_for_afe.clone()) {
                     drop_count += 1;
                     if drop_count <= 5 || drop_count % 100 == 0 {
-                        warn!("[I2S] ⚠️ AFE feed channel full — frame dropped (total: {})", drop_count);
+                        warn!("[I2S] AFE feed channel full — frame dropped (total: {})", drop_count);
                     }
                 }
             } else {
-                warn!("⚠️ I2S READ MISMATCH: got {}, expected {}", n, i2s_batch_len);
+                warn!("I2S READ MISMATCH: got {}, expected {}", n, read_len_bytes);
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
