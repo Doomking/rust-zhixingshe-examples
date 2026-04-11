@@ -95,10 +95,8 @@ impl AudioProcessor {
 
         let filename = format!("utterance_{}_{}.wav", self.session_id, self.utterance_count);
         let full_path = std::path::Path::new(&self.storage_path).join(&filename);
-        let mut writer = WavWriter::create(&full_path, self.spec)?;
-        for &old_sample in self.rolling_buffer.iter() {
-            let _ = writer.write_sample(old_sample);
-        }
+        let writer = WavWriter::create(&full_path, self.spec)?;
+        self.rolling_buffer.clear();
         self.current_utterance = Some(writer);
         Ok(())
     }

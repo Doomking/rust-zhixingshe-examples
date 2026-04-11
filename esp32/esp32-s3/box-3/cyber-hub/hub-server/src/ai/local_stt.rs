@@ -33,35 +33,30 @@ impl LocalStt {
     }
 
     pub fn transcribe(&self, pcm_data: &[i16]) -> Result<String> {
-        // 1. 双声道合一并且转换格式 (Stereo -> Mono, i16 -> f32)
-        // 注意：底层采集的是立体声(2ch)，Whisper 要求单声道(1ch)
-        let mut f32_samples = Vec::with_capacity(pcm_data.len() / 2);
-        for chunk in pcm_data.chunks_exact(2) {
-            let mono = (chunk[0] as f32 + chunk[1] as f32) / 2.0;
-            // 2.5x 软件数字增益 (平和放大，减少削波失真)
-            f32_samples.push(((mono / 32768.0) * 2.5).clamp(-1.0, 1.0));
-        }
+        // 1. i16 → f32 normalized (input is already mono 16kHz from AFE)
+        let f32_samples: Vec<f32> = pcm_data
+            .iter()
+            .map(|&s| (s as f32) / 32768.0)
+            .collect();
 
         // 2. 创建推理状态
         let mut state = self.ctx.create_state().context("Failed to create whisper state")?;
         
-        // 3. 配置参数 (回归标准束搜索 Beam-7 - 在稳定性与深层纠错间取得平衡)
         let mut params = FullParams::new(SamplingStrategy::BeamSearch { 
-            beam_size: 7, 
+            beam_size: 3, 
             patience: 1.0 
         });
         
         params.set_n_threads(4);
         params.set_language(Some("zh"));
         
-        // 核心优化：彻底中性化。不带任何场景和内容偏见，仅告知模型语言类型以确保通用识别精度。
-        params.set_initial_prompt("这是一段中文语音录音。"); 
+        params.set_initial_prompt("以下是简体中文语音指令。Hi ESP，"); 
         
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_print_special(false);
-        params.set_suppress_blank(false);
+        params.set_suppress_blank(true);
         // 核心优化：斩断重复循环。模型在推理当前切片时不再参考上一段内容，彻底解决“鸽子鸽子”现象。
         params.set_no_context(true);
 
@@ -83,7 +78,6 @@ impl LocalStt {
             }
         }
 
-        // 6. 深度清洗逻辑 (V15：无视长度的括号剥离 + 强制黑名单)
         let mut finalized = result.trim().to_string();
         
         // A. 拦截显而易见的废话关键词 (YouTube/字幕组幻觉 + 提示词回响)

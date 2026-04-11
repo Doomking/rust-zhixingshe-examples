@@ -372,8 +372,8 @@ pub fn audio_thread(i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecConfi
                     last_vad_log = vad_now;
                 }
 
-                if res.wake_word_index > 0 && !wakeup_triggered {
-                    info!("[AUDIO] 🟢 WAKEUP DETECTED: ID={}, fetch #{}", res.wake_word_index, fetch_count);
+                if res.wakeup_state != 0 && !wakeup_triggered {
+                    info!("[AUDIO] 🟢 WAKEUP DETECTED: state={}, ID={}, fetch #{}", res.wakeup_state, res.wake_word_index, fetch_count);
                     wakeup_triggered = true;
                     if let Ok(mut status) = crate::get_status().write() {
                         status.voice_state = 1;
