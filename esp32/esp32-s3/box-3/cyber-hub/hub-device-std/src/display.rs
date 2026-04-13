@@ -8,7 +8,7 @@ use embedded_graphics::mono_font::{
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::pixelcolor::raw::RawU16;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Text, Baseline};
 
 // --- PSRAM FrameBuffer for flicker-free rendering ---
@@ -361,21 +361,6 @@ where
         Rectangle::new(Point::new(0, 110), Size::new(320, 30)),
     )?;
 
-    // Prioritize Voice State Over Weather
-    if status.voice_state == 1 {
-        let status_style = MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN);
-        let status_text = "● LISTENING...";
-        let x = (320 - (status_text.len() as i32 * 10)) / 2;
-        Text::with_baseline(status_text, Point::new(x, 115), status_style, Baseline::Top).draw(display)?;
-        return Ok(());
-    } else if status.voice_state == 2 {
-        let status_style = MonoTextStyle::new(&FONT_10X20, Rgb565::new(31, 45, 9)); // Amber
-        let status_text = "PROCESSING...";
-        let x = (320 - (status_text.len() as i32 * 10)) / 2;
-        Text::with_baseline(status_text, Point::new(x, 115), status_style, Baseline::Top).draw(display)?;
-        return Ok(());
-    }
-
     let desc_raw =
         unsafe { core::str::from_utf8_unchecked(&status.weather_desc_en) }.trim_matches('\0');
     if !desc_raw.is_empty() {
@@ -481,6 +466,58 @@ fn format_wind<'a>(buf: &'a mut [u8], wind: u8) -> &'a str {
     }
     buf[pos] = b'0' + (w % 10);
     unsafe { core::str::from_utf8_unchecked(&buf[..pos + 1]) }
+}
+
+pub fn draw_voice_screen<D>(display: &mut D, status: &SystemStatus) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565> + OriginDimensions,
+{
+    let (base_color, label) = match status.voice_state {
+        1 => (Rgb565::GREEN, "LISTENING..."),
+        2 => (Rgb565::YELLOW, "PROCESSING..."),
+        3 => (Rgb565::new(8, 32, 31), "REPLYING..."),
+        _ => (Rgb565::GREEN, "LISTENING..."),
+    };
+
+    // Breathing ring: ±4px size pulse over 2 seconds
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u32;
+    let phase = (millis % 2000) as f32 / 2000.0;
+    let wave = (phase * 2.0 * core::f32::consts::PI).cos();
+
+    let cx: i32 = 160;
+    let cy: i32 = 120;
+    let diameter = (180.0 + wave * 4.0) as u32;
+
+    Circle::new(
+        Point::new(cx - diameter as i32 / 2, cy - diameter as i32 / 2),
+        diameter,
+    )
+    .into_styled(PrimitiveStyle::with_stroke(base_color, 10))
+    .draw(display)?;
+
+    // Text centered inside the ring
+    let label_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
+    let label_w = label.len() as i32 * 10;
+    let label_x = (320 - label_w) / 2;
+    Text::with_baseline(label, Point::new(label_x, 110), label_style, Baseline::Top)
+        .draw(display)?;
+
+    Ok(())
+}
+
+fn scale_rgb565(color: Rgb565, brightness: f32) -> Rgb565 {
+    let raw = RawU16::from(color).into_inner();
+    let r = ((raw >> 11) & 0x1F) as f32;
+    let g = ((raw >> 5) & 0x3F) as f32;
+    let b = (raw & 0x1F) as f32;
+    Rgb565::new(
+        (r * brightness) as u8,
+        (g * brightness) as u8,
+        (b * brightness) as u8,
+    )
 }
 
 pub fn draw_cyber_hub_ui<D>(display: &mut D, status_msg: &str) -> Result<(), D::Error>

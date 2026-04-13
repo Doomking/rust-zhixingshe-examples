@@ -24,7 +24,7 @@ use cyber_hub_std::tcp::tcp_thread;
 use cyber_hub_std::weather::weather_thread;
 use cyber_hub_std::wifi::connect_wifi;
 
-use cyber_hub_std::display::{draw_cyber_hub_ui, draw_dashboard, flush_framebuffer, FrameBuffer};
+use cyber_hub_std::display::{draw_cyber_hub_ui, draw_dashboard, draw_voice_screen, flush_framebuffer, FrameBuffer};
 
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -180,13 +180,17 @@ fn main() -> anyhow::Result<()> {
             let mut s = status_ref.write().unwrap();
             s.unix_time = cur_time + CST_OFFSET;
         }
-        let status = status_ref.read().unwrap().clone();
         // Render to framebuffer (in-memory, instant)
         fb.buf.fill(0); // Clear to black
-        if let Ok(status) = get_status().read() {
-            let _ = draw_dashboard(&mut fb, &*status);
+        if let Ok(status) = status_ref.read() {
+            if status.voice_state != 0 {
+                let _ = draw_voice_screen(&mut fb, &*status);
+            } else {
+                let _ = draw_dashboard(&mut fb, &*status);
+            }
         }
         let _ = flush_framebuffer(&mut display, &fb);
-        thread::sleep(std::time::Duration::from_millis(200));
+        let is_voice_active = status_ref.read().map_or(false, |s| s.voice_state != 0);
+        thread::sleep(std::time::Duration::from_millis(if is_voice_active { 50 } else { 200 }));
     }
 }
