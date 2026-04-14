@@ -2,7 +2,8 @@ use std::net::TcpStream;
 use std::io::{Read, Write};
 use std::thread;
 use log::*;
-use crate::{get_flip_channel, get_voice_channel, get_audio_channel};
+use crate::voice_prompts::COMMAND_DONE_PCM;
+use crate::{enqueue_playback_pcm, get_audio_channel, get_flip_channel, get_voice_channel};
 
 pub fn tcp_thread() {
     info!("Starting TCP Client thread...");
@@ -22,6 +23,8 @@ pub fn tcp_thread() {
                 let flip_ch = get_flip_channel();
                 let voice_ch = get_voice_channel();
                 let audio_ch = get_audio_channel();
+                let mut parse_buf: Vec<u8> = Vec::with_capacity(1024);
+                let mut read_buf = [0u8; 512];
 
                 loop {
                     // Helper to send scoped packets
@@ -65,17 +68,42 @@ pub fn tcp_thread() {
                         break;
                     }
 
-                    // 4. Try to read heartbeats/metrics from server
-                    let mut buffer = [0u8; 6];
-                    if let Ok(n) = stream.read(&mut buffer) {
-                        if n == 6 && buffer[0] == crate::protocol::MAGIC_HEADER && buffer[1] == crate::protocol::MSG_METRICS {
-                            // Update system metrics: [Magic, Type, LenL, LenH, CPU, MEM]
-                            let cpu = buffer[4];
-                            let mem = buffer[5];
-                            if let Ok(mut status) = crate::get_status().write() {
-                                status.cpu_usage = cpu;
-                                status.mem_usage = mem;
+                    // 4. Read server packets (metrics, feedback cues, …)
+                    if let Ok(n) = stream.read(&mut read_buf) {
+                        if n == 0 {
+                            error!("TCP EOF, reconnecting...");
+                            break;
+                        }
+                        parse_buf.extend_from_slice(&read_buf[..n]);
+                    }
+                    while parse_buf.len() >= 4 {
+                        if parse_buf[0] != crate::protocol::MAGIC_HEADER {
+                            parse_buf.remove(0);
+                            continue;
+                        }
+                        let msg_type = parse_buf[1];
+                        let payload_len =
+                            u16::from_le_bytes([parse_buf[2], parse_buf[3]]) as usize;
+                        if parse_buf.len() < 4 + payload_len {
+                            break;
+                        }
+                        let packet: Vec<u8> = parse_buf.drain(..4 + payload_len).collect();
+                        let payload = &packet[4..];
+
+                        match msg_type {
+                            crate::protocol::MSG_METRICS if payload.len() >= 2 => {
+                                let cpu = payload[0];
+                                let mem = payload[1];
+                                if let Ok(mut status) = crate::get_status().write() {
+                                    status.cpu_usage = cpu;
+                                    status.mem_usage = mem;
+                                }
                             }
+                            crate::protocol::MSG_FEEDBACK if payload.is_empty() => {
+                                debug!("[PLAYBACK] received done cue from server");
+                                enqueue_playback_pcm(COMMAND_DONE_PCM.to_vec());
+                            }
+                            _ => {}
                         }
                     }
 

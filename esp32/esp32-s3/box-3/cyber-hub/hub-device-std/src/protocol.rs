@@ -6,4 +6,5 @@ pub const MSG_FLIP_EVENT: u8 = 0x0F; // [Header, 0x0F, 0, 0]
 pub const MSG_VOICE_START: u8 = 0x10; // [Header, 0x10, 0, 0]
 pub const MSG_VOICE_DATA: u8 = 0x11;  // [Header, 0x11, LenL, LenH, ...PCM]
 pub const MSG_VOICE_END: u8 = 0x12;   // [Header, 0x12, 0, 0]
-pub const MSG_FEEDBACK: u8 = 0x20;    // [Header, 0x20, Len, ...Message]
+/// 设备端：`Len==0` 时播放预制「完成」提示音；非空载荷保留作将来 PCM TTS。
+pub const MSG_FEEDBACK: u8 = 0x20; // [Header, 0x20, LenL, LenH, ...payload]

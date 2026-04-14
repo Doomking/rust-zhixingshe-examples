@@ -11,6 +11,9 @@ use async_openai::types::{
     CreateTranscriptionRequestArgs,
 };
 use async_openai::Client;
+use tokio::io::AsyncWriteExt;
+use tokio::net::tcp::OwnedWriteHalf;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 pub struct AiProcessor {
@@ -72,7 +75,24 @@ impl AiProcessor {
         info!("\x1b[32;1m[WAKE] Hardware-triggered wakeup authorized.\x1b[0m");
     }
 
-    pub async fn process_utterance(&self, wav_path: String) -> Result<()> {
+    async fn send_local_done_cue(net: &std::sync::Arc<Mutex<OwnedWriteHalf>>) {
+        let pkt = [
+            crate::protocol::MAGIC_HEADER,
+            crate::protocol::MSG_FEEDBACK,
+            0,
+            0,
+        ];
+        let mut w = net.lock().await;
+        if let Err(e) = w.write_all(&pkt).await {
+            warn!("[NET] MSG_FEEDBACK (local done cue) failed: {}", e);
+        }
+    }
+
+    pub async fn process_utterance(
+        &self,
+        wav_path: String,
+        net: std::sync::Arc<Mutex<OwnedWriteHalf>>,
+    ) -> Result<()> {
         let text = if self.use_internal && self.local_stt.is_some() {
             // 本地推理
             self.process_utterance_internally(&wav_path)?
@@ -165,6 +185,7 @@ impl AiProcessor {
 
         // 4. 优先尝试本地指令路由（无网络延迟）
         if Self::try_local_command(&final_command) {
+            Self::send_local_done_cue(&net).await;
             return Ok(());
         }
 
@@ -185,6 +206,7 @@ impl AiProcessor {
                         println!("\x1b[36m[ZeroClaw] Agent Response: \"{}\"\x1b[0m", content);
                     }
                 }
+                Self::send_local_done_cue(&net).await;
             }
             Err(_) => {
                 info!("[GATEKEEPER] ZeroClaw relay skipped (Is it running on port 42617?)");

@@ -17,6 +17,7 @@ use std::thread;
 use std::time::SystemTime;
 
 use cyber_hub_std::audio::{audio_thread, CodecConfig};
+use cyber_hub_std::init_playback_pipe;
 pub use cyber_hub_std::get_status;
 use cyber_hub_std::imu::imu_thread;
 use cyber_hub_std::sensor::sensor_thread;
@@ -86,6 +87,7 @@ fn main() -> anyhow::Result<()> {
     let mut backlight = gpio::PinDriver::output(pins.gpio47)?;
     backlight.set_high()?;
 
+    // ESP-BOX-3: BSP power amp = GPIO46; enable = HIGH (matches esp-bsp `pa_reverted = false` / audio_probe).
     let mut pa_ctrl = gpio::PinDriver::output(pins.gpio46)?;
     pa_ctrl.set_high()?;
 
@@ -142,6 +144,7 @@ fn main() -> anyhow::Result<()> {
     let i2c1_sensor = i2c1_shared.clone();
     thread::spawn(move || sensor_thread(i2c1_sensor));
 
+    let playback_rx = init_playback_pipe();
     thread::spawn(move || tcp_thread());
     thread::spawn(move || weather_thread());
 
@@ -159,8 +162,15 @@ fn main() -> anyhow::Result<()> {
     .ok();
 
     thread::spawn(move || {
-        audio_thread(i2s_driver, codec_config);
+        audio_thread(i2s_driver, codec_config, playback_rx);
     });
+
+    // Optional: play `wake.pcm` once after codec/I2S are up (set `CYBER_HUB_BOOT_VOICE=1` in `.env`).
+    if option_env!("CYBER_HUB_BOOT_VOICE") == Some("1") {
+        thread::sleep(std::time::Duration::from_millis(900));
+        cyber_hub_std::enqueue_playback_pcm(cyber_hub_std::voice_prompts::WAKE_ACK_PCM.to_vec());
+        info!("Boot voice chime (CYBER_HUB_BOOT_VOICE=1)");
+    }
 
     // Reset spawn config for other threads
     esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration::default()

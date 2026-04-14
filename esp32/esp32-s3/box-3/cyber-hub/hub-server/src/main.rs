@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use hub_server::config::AppConfig;
@@ -44,7 +45,8 @@ async fn handle_connection(
     metrics: std::sync::Arc<MetricsMonitor>,
     ai_processor: std::sync::Arc<AiProcessor>
 ) -> Result<()> {
-    let (mut rd, mut wr) = socket.into_split();
+    let (mut rd, wr) = socket.into_split();
+    let wr = std::sync::Arc::new(Mutex::new(wr));
     
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let port = rd.peer_addr().map(|a| a.port()).unwrap_or(0);
@@ -62,6 +64,7 @@ async fn handle_connection(
     let mut file = File::create(&pcm_path).await?;
 
     // Task A: Periodic Metrics (Server -> Device)
+    let wr_metrics = wr.clone();
     let metrics_handle = tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -72,7 +75,8 @@ async fn handle_connection(
                 hub_server::protocol::MSG_METRICS, 
                 0x02, 0x00, cpu, mem
             ];
-            if let Err(e) = wr.write_all(&packet).await {
+            let mut g = wr_metrics.lock().await;
+            if let Err(e) = g.write_all(&packet).await {
                 warn!("Metrics send failed: {}", e);
                 break;
             }
@@ -128,8 +132,9 @@ async fn handle_connection(
                     if !payload.is_empty() {
                         if let Some(wav_path) = audio_processor.process_data(payload)? {
                             let ai_ptr = ai_processor.clone();
+                            let wr_ai = wr.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = ai_ptr.process_utterance(wav_path).await {
+                                if let Err(e) = ai_ptr.process_utterance(wav_path, wr_ai).await {
                                     error!("AI Processing Error: {}", e);
                                 }
                             });
@@ -141,8 +146,9 @@ async fn handle_connection(
                     info!("[PKT] Voice Session End");
                     if let Some(wav_path) = audio_processor.stop_manual_session()? {
                         let ai_ptr = ai_processor.clone();
+                        let wr_ai = wr.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = ai_ptr.process_utterance(wav_path).await {
+                            if let Err(e) = ai_ptr.process_utterance(wav_path, wr_ai).await {
                                 error!("AI Processing Error: {}", e);
                             }
                         });

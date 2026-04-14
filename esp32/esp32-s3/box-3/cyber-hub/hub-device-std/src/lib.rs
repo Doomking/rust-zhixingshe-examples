@@ -4,6 +4,7 @@ pub mod fonts;
 pub mod imu;
 pub mod sensor;
 pub mod tcp;
+pub mod voice_prompts;
 pub mod weather;
 pub mod wifi;
 pub mod protocol;
@@ -65,4 +66,27 @@ pub fn get_voice_channel() -> &'static (Mutex<Sender<u32>>, Mutex<Receiver<u32>>
         let (tx, rx) = channel();
         (Mutex::new(tx), Mutex::new(rx))
     })
+}
+
+/// 下行播放队列：单声道 s16le 16 kHz PCM；由 `audio_thread` 消费并送到 I2S TX。
+static PLAYBACK_TX: OnceLock<Mutex<Sender<Vec<u8>>>> = OnceLock::new();
+
+/// 须在启动 TCP / `audio_thread` 之前调用一次。
+pub fn init_playback_pipe() -> Receiver<Vec<u8>> {
+    let (tx, rx) = channel();
+    PLAYBACK_TX
+        .set(Mutex::new(tx))
+        .expect("init_playback_pipe: call only once");
+    rx
+}
+
+pub fn enqueue_playback_pcm(mono_s16le: Vec<u8>) {
+    if mono_s16le.is_empty() {
+        return;
+    }
+    if let Some(m) = PLAYBACK_TX.get() {
+        if let Ok(g) = m.lock() {
+            let _ = g.send(mono_s16le);
+        }
+    }
 }

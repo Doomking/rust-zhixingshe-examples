@@ -4,6 +4,7 @@ use esp_idf_svc::hal::i2s::{I2sBiDir, I2sDriver};
 use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 use esp_idf_svc::sys::esp_sr;
 use log::*;
+use std::collections::VecDeque;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
@@ -88,27 +89,277 @@ pub fn es7210_init(i2c: &mut I2cDriver<'static>) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn es8311_init(i2c: &mut I2cDriver<'static>) -> anyhow::Result<()> {
-    info!("ES8311: Initializing codec output (aligned with verified no-std hub-device)...");
+/// ES8311 on ESP-BOX-3 (I2C 7-bit `0x18`). Sequence ported from Espressif
+/// `esp-adf` / `esp_codec_dev` `es8311.c`: `es8311_open` → `es8311_set_fs` (16 kHz,
+/// 16-bit I2S, MCLK = 256×fs = 4.096 MHz) → `es8311_start` (DAC-only) → unmute.
+///
+/// PA GPIO is **not** driven here (handled in `main` / probe), matching the driver's split
+/// between `open` and `enable`/`es8311_pa_power`.
+const ES8311_ADDR: u8 = 0x18;
 
-    let mut write = |reg, val| i2c.write(0x18, &[reg, val], 100);
+#[inline]
+fn es8311_write(i2c: &mut I2cDriver<'static>, reg: u8, val: u8) -> anyhow::Result<()> {
+    i2c.write(ES8311_ADDR, &[reg, val], 100)
+        .map_err(|e| anyhow::anyhow!("ES8311 write reg 0x{:02x}: {:?}", reg, e))
+}
 
-    write(0x00, 0x80)?; write(0x00, 0x00)?;
-    write(0x01, 0x30)?; write(0x02, 0x10)?;
-    write(0x03, 0x10)?; write(0x04, 0x10)?;
-    write(0x0d, 0x01)?; write(0x0e, 0x02)?;
-    write(0x12, 0x00)?; write(0x13, 0x10)?;
-    write(0x14, 0x10)?; write(0x15, 0x00)?;
-    write(0x32, 0x00)?; write(0x33, 0x00)?;
-    write(0x37, 0x08)?; write(0x44, 0x08)?;
-    write(0x17, 0xbf)?; write(0x16, 0x00)?;
-    write(0x45, 0x00)?;
+#[inline]
+fn es8311_read(i2c: &mut I2cDriver<'static>, reg: u8) -> anyhow::Result<u8> {
+    let mut b = [0u8; 1];
+    i2c.write_read(ES8311_ADDR, &[reg], &mut b, 100)
+        .map_err(|e| anyhow::anyhow!("ES8311 read reg 0x{:02x}: {:?}", reg, e))?;
+    Ok(b[0])
+}
 
-    info!("ES8311: Ready.");
+/// Clock row from `coeff_div[]` for `mclk = 4_096_000`, `rate = 16_000` in `es8311.c`.
+struct Es8311Coeff {
+    pre_div: u8,
+    pre_multi: u8,
+    adc_div: u8,
+    dac_div: u8,
+    fs_mode: u8,
+    lrck_h: u8,
+    lrck_l: u8,
+    bclk_div: u8,
+    adc_osr: u8,
+    dac_osr: u8,
+}
+
+const COEFF_16K_MCLK4096: Es8311Coeff = Es8311Coeff {
+    pre_div: 0x01,
+    pre_multi: 0x01,
+    adc_div: 0x01,
+    dac_div: 0x01,
+    fs_mode: 0x00,
+    lrck_h: 0x00,
+    lrck_l: 0xff,
+    bclk_div: 0x04,
+    adc_osr: 0x10,
+    dac_osr: 0x20,
+};
+
+fn es8311_config_sample(i2c: &mut I2cDriver<'static>, c: &Es8311Coeff) -> anyhow::Result<()> {
+    let mut regv = es8311_read(i2c, 0x02)?;
+    regv &= 0x07;
+    regv |= (c.pre_div - 1) << 5;
+    let datmp: u8 = match c.pre_multi {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        8 => 3,
+        _ => 0,
+    };
+    // `use_mclk == true` (I2S MCLK wired): do not apply the no-MCLK override branch.
+    regv |= datmp << 3;
+    es8311_write(i2c, 0x02, regv)?;
+
+    regv = 0;
+    regv |= (c.adc_div - 1) << 4;
+    regv |= (c.dac_div - 1) << 0;
+    es8311_write(i2c, 0x05, regv)?;
+
+    regv = es8311_read(i2c, 0x03)?;
+    regv &= 0x80;
+    regv |= c.fs_mode << 6;
+    regv |= c.adc_osr;
+    es8311_write(i2c, 0x03, regv)?;
+
+    regv = es8311_read(i2c, 0x04)?;
+    regv &= 0x80;
+    regv |= c.dac_osr;
+    es8311_write(i2c, 0x04, regv)?;
+
+    regv = es8311_read(i2c, 0x07)?;
+    regv &= 0xC0;
+    regv |= c.lrck_h;
+    es8311_write(i2c, 0x07, regv)?;
+
+    regv = 0;
+    regv |= c.lrck_l;
+    es8311_write(i2c, 0x08, regv)?;
+
+    regv = es8311_read(i2c, 0x06)?;
+    regv &= 0xE0;
+    let bclk_part = if c.bclk_div < 19 {
+        c.bclk_div - 1
+    } else {
+        c.bclk_div
+    };
+    regv |= bclk_part;
+    es8311_write(i2c, 0x06, regv)?;
     Ok(())
 }
 
-pub fn audio_thread(i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecConfig) {
+/// `es8311_set_fs`: 16-bit I2S normal + sample-rate / MCLK coefficients.
+fn es8311_set_fs_16k(i2c: &mut I2cDriver<'static>) -> anyhow::Result<()> {
+    let mut dac_iface = es8311_read(i2c, 0x09)?;
+    let mut adc_iface = es8311_read(i2c, 0x0a)?;
+    dac_iface |= 0x0c;
+    adc_iface |= 0x0c;
+    es8311_write(i2c, 0x09, dac_iface)?;
+    es8311_write(i2c, 0x0a, adc_iface)?;
+
+    dac_iface = es8311_read(i2c, 0x09)?;
+    adc_iface = es8311_read(i2c, 0x0a)?;
+    dac_iface &= 0xFC;
+    adc_iface &= 0xFC;
+    es8311_write(i2c, 0x09, dac_iface)?;
+    es8311_write(i2c, 0x0a, adc_iface)?;
+
+    es8311_config_sample(i2c, &COEFF_16K_MCLK4096)?;
+    Ok(())
+}
+
+/// `es8311_start` for `ESP_CODEC_DEV_WORK_MODE_DAC`, `digital_mic == false`.
+fn es8311_start_dac(i2c: &mut I2cDriver<'static>) -> anyhow::Result<()> {
+    let mut regv = 0x80u8;
+    regv &= 0xBF;
+    es8311_write(i2c, 0x00, regv)?;
+
+    regv = 0x3F;
+    regv &= 0x7F;
+    regv &= !0x40;
+    es8311_write(i2c, 0x01, regv)?;
+
+    let mut dac_iface = es8311_read(i2c, 0x09)?;
+    let mut adc_iface = es8311_read(i2c, 0x0a)?;
+    dac_iface &= 0xBF;
+    adc_iface &= 0xBF;
+    dac_iface &= !0x40;
+    es8311_write(i2c, 0x09, dac_iface)?;
+    es8311_write(i2c, 0x0a, adc_iface)?;
+
+    es8311_write(i2c, 0x17, 0xBF)?;
+    es8311_write(i2c, 0x0e, 0x02)?;
+    es8311_write(i2c, 0x12, 0x00)?;
+    es8311_write(i2c, 0x14, 0x1a)?;
+
+    regv = es8311_read(i2c, 0x14)?;
+    regv &= !0x40;
+    es8311_write(i2c, 0x14, regv)?;
+
+    es8311_write(i2c, 0x0d, 0x01)?;
+    es8311_write(i2c, 0x15, 0x40)?;
+    es8311_write(i2c, 0x37, 0x08)?;
+    es8311_write(i2c, 0x45, 0x00)?;
+    Ok(())
+}
+
+pub fn es8311_init(i2c: &mut I2cDriver<'static>) -> anyhow::Result<()> {
+    info!("ES8311: init (esp_codec_dev es8311_open + set_fs + start, 16k/16-bit, MCLK 256×fs)...");
+
+    let mut regv = es8311_read(i2c, 0x0d)?;
+    if regv != 0xFA {
+        es8311_write(i2c, 0x0d, 0xFA)?;
+    }
+
+    es8311_write(i2c, 0x44, 0x08)?;
+    es8311_write(i2c, 0x44, 0x08)?;
+
+    es8311_write(i2c, 0x01, 0x30)?;
+    es8311_write(i2c, 0x02, 0x00)?;
+    es8311_write(i2c, 0x03, 0x10)?;
+    es8311_write(i2c, 0x16, 0x24)?;
+    es8311_write(i2c, 0x04, 0x10)?;
+    es8311_write(i2c, 0x05, 0x00)?;
+    es8311_write(i2c, 0x0b, 0x00)?;
+    es8311_write(i2c, 0x0c, 0x00)?;
+    es8311_write(i2c, 0x10, 0x1F)?;
+    es8311_write(i2c, 0x11, 0x7F)?;
+    es8311_write(i2c, 0x00, 0x80)?;
+
+    regv = es8311_read(i2c, 0x00)?;
+    regv &= 0xBF;
+    es8311_write(i2c, 0x00, regv)?;
+
+    regv = 0x3F;
+    regv &= 0x7F;
+    regv &= !0x40;
+    es8311_write(i2c, 0x01, regv)?;
+
+    regv = es8311_read(i2c, 0x06)?;
+    regv &= !0x20;
+    es8311_write(i2c, 0x06, regv)?;
+
+    es8311_write(i2c, 0x13, 0x10)?;
+    es8311_write(i2c, 0x1b, 0x0A)?;
+    es8311_write(i2c, 0x1c, 0x6A)?;
+    es8311_write(i2c, 0x44, 0x58)?;
+
+    es8311_set_fs_16k(i2c)?;
+    es8311_start_dac(i2c)?;
+
+    regv = es8311_read(i2c, 0x31)?;
+    regv &= 0x9F;
+    es8311_write(i2c, 0x31, regv)?;
+    // 0x32: DAC digital volume. Probe tone is hot; `say`/ffmpeg prompts are much lower RMS — keep high.
+    es8311_write(i2c, 0x32, 0xB8)?;
+    es8311_write(i2c, 0x33, 0x00)?;
+
+    info!("ES8311: ready (DAC path, unmuted, digital vol tuned for embedded voice PCM).");
+    Ok(())
+}
+
+struct MonoPlayback {
+    rx: mpsc::Receiver<Vec<u8>>,
+    queue: VecDeque<Vec<u8>>,
+    cur: Vec<u8>,
+    off: usize,
+}
+
+impl MonoPlayback {
+    fn new(rx: mpsc::Receiver<Vec<u8>>) -> Self {
+        Self {
+            rx,
+            queue: VecDeque::new(),
+            cur: Vec::new(),
+            off: 0,
+        }
+    }
+
+    fn poll_rx(&mut self) {
+        while let Ok(v) = self.rx.try_recv() {
+            if !v.is_empty() {
+                debug!("[PLAYBACK] queued {} bytes", v.len());
+                self.queue.push_back(v);
+            }
+        }
+    }
+
+    fn advance_buffer(&mut self) {
+        if self.off >= self.cur.len() {
+            self.cur = self.queue.pop_front().unwrap_or_default();
+            self.off = 0;
+        }
+    }
+
+    /// 输出 `frames` 个立体声帧（s16le 交错 L,R），与 `read_len_bytes` 一致。
+    fn fill_stereo_s16le(&mut self, dst: &mut [u8], frames: usize) {
+        // Boost queued mono PCM (wake/done); levels from `say`+ffmpeg are usually well below full scale.
+        const PLAYBACK_GAIN: i32 = 3;
+        self.poll_rx();
+        for i in 0..frames {
+            self.advance_buffer();
+            let m = if self.off + 2 <= self.cur.len() {
+                let raw = i16::from_le_bytes([self.cur[self.off], self.cur[self.off + 1]]) as i32;
+                self.off += 2;
+                (raw * PLAYBACK_GAIN).clamp(i16::MIN as i32, i16::MAX as i32) as i16
+            } else {
+                0i16
+            };
+            let b = m.to_le_bytes();
+            let idx = i * 4;
+            dst[idx..idx + 2].copy_from_slice(&b);
+            dst[idx + 2..idx + 4].copy_from_slice(&b);
+        }
+    }
+}
+
+pub fn audio_thread(
+    i2s_driver: I2sDriver<'static, I2sBiDir>,
+    config: CodecConfig,
+    playback_rx: mpsc::Receiver<Vec<u8>>,
+) {
     info!("Audio Engine: Using 3-thread decoupled pipeline with library state.");
 
     let i2s_driver = Box::leak(Box::new(i2s_driver));
@@ -385,6 +636,7 @@ pub fn audio_thread(i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecConfi
                     if let Ok(tx) = voice_ch.0.lock() {
                         let _ = tx.send(crate::protocol::MSG_VOICE_START as u32);
                     }
+                    crate::enqueue_playback_pcm(crate::voice_prompts::WAKE_ACK_PCM.to_vec());
                 }
 
                 if res.ret_value == 0 {
@@ -423,10 +675,11 @@ pub fn audio_thread(i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecConfi
     let stereo_samples = chunk_size * 2;
     let mut stereo_buf = vec![0i16; stereo_samples];
     let read_len_bytes = stereo_samples * std::mem::size_of::<i16>();
-    let silence_u8 = vec![0u8; read_len_bytes];
+    let mut tx_stereo_buf = vec![0u8; read_len_bytes];
     let mut mono_for_afe = vec![0i16; chunk_size];
     let mut log_count: u32 = 0;
     let mut drop_count: u64 = 0;
+    let mut playback = MonoPlayback::new(playback_rx);
 
     info!(
         "[I2S] Stereo 16-bit read → L-ch extract → DC removal → AFE: chunk_size={}, stereo_bytes={}",
@@ -434,7 +687,10 @@ pub fn audio_thread(i2s_driver: I2sDriver<'static, I2sBiDir>, config: CodecConfi
     );
 
     loop {
-        let _ = i2s_tx.write(&silence_u8, 50);
+        playback.fill_stereo_s16le(&mut tx_stereo_buf, chunk_size);
+        if let Err(e) = i2s_tx.write(&tx_stereo_buf, 50) {
+            warn!("[PLAYBACK] i2s_tx.write failed: {:?}", e);
+        }
 
         let read_buf_u8 = unsafe {
             std::slice::from_raw_parts_mut(
