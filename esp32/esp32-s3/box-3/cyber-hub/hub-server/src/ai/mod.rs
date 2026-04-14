@@ -4,6 +4,7 @@ pub mod local_stt;
 use self::downloader::download_model_if_needed;
 use self::local_stt::LocalStt;
 use crate::config::{AppConfig, ZcRelayMode};
+use crate::platform::tts::{synthesize_tts_pcm, TtsRequest};
 use anyhow::{Context, Result};
 use async_openai::config::{Config, OpenAIConfig};
 use async_openai::types::{
@@ -14,9 +15,7 @@ use async_openai::Client;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use std::time::Duration;
-use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_tungstenite::{
     connect_async,
@@ -41,9 +40,12 @@ pub struct AiProcessor {
     zc_ws_session_id: Option<String>,
     zc_ws_session_name: Option<String>,
     enable_tts_feedback: bool,
+    tts_backend: crate::config::TtsBackend,
     tts_voice: String,
     tts_rate: u32,
     tts_max_chars: usize,
+    tts_piper_cmd: String,
+    tts_piper_model: String,
     http: reqwest::Client,
 }
 
@@ -102,9 +104,12 @@ impl AiProcessor {
             zc_ws_session_id: config.zc_ws_session_id.clone(),
             zc_ws_session_name: config.zc_ws_session_name.clone(),
             enable_tts_feedback: config.enable_tts_feedback,
+            tts_backend: config.tts_backend,
             tts_voice: config.tts_voice.clone(),
             tts_rate: config.tts_rate,
             tts_max_chars: config.tts_max_chars,
+            tts_piper_cmd: config.tts_piper_cmd.clone(),
+            tts_piper_model: config.tts_piper_model.clone(),
             http,
         }
     }
@@ -165,99 +170,21 @@ impl AiProcessor {
             Self::send_local_done_cue(net).await;
             return Ok(());
         }
-        if let Some(pcm) = self.synthesize_tts_pcm(trimmed).await {
+        let req = TtsRequest {
+            backend: self.tts_backend,
+            text: trimmed,
+            max_chars: self.tts_max_chars,
+            voice: &self.tts_voice,
+            rate: self.tts_rate,
+            piper_cmd: &self.tts_piper_cmd,
+            piper_model: &self.tts_piper_model,
+        };
+        if let Some(pcm) = synthesize_tts_pcm(&req).await {
             Self::send_feedback_pcm_chunks(net, &pcm).await?;
         } else {
             Self::send_local_done_cue(net).await;
         }
         Ok(())
-    }
-
-    async fn synthesize_tts_pcm(&self, text: &str) -> Option<Vec<u8>> {
-        let mut t = text.replace('\n', " ");
-        if t.chars().count() > self.tts_max_chars {
-            t = t.chars().take(self.tts_max_chars).collect();
-        }
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_millis();
-        let aiff = format!("/tmp/cyberhub_tts_{ts}.aiff");
-        let pcm = format!("/tmp/cyberhub_tts_{ts}.pcm");
-
-        let say = Command::new("say")
-            .arg("-v")
-            .arg(&self.tts_voice)
-            .arg("-r")
-            .arg(self.tts_rate.to_string())
-            .arg("-o")
-            .arg(&aiff)
-            .arg(&t)
-            .output()
-            .await;
-        match say {
-            Ok(out) if out.status.success() => {}
-            Ok(out) => {
-                warn!("[TTS] `say` failed: {}", String::from_utf8_lossy(&out.stderr));
-                return None;
-            }
-            Err(e) => {
-                warn!("[TTS] spawn `say` failed: {e}");
-                return None;
-            }
-        }
-
-        let ff = Command::new("ffmpeg")
-            .arg("-y")
-            .arg("-loglevel")
-            .arg("error")
-            .arg("-i")
-            .arg(&aiff)
-            .arg("-f")
-            .arg("s16le")
-            .arg("-ac")
-            .arg("1")
-            .arg("-ar")
-            .arg("16000")
-            .arg(&pcm)
-            .output()
-            .await;
-        match ff {
-            Ok(out) if out.status.success() => {}
-            Ok(out) => {
-                warn!(
-                    "[TTS] `ffmpeg` convert failed: {}",
-                    String::from_utf8_lossy(&out.stderr)
-                );
-                let _ = fs::remove_file(&aiff).await;
-                return None;
-            }
-            Err(e) => {
-                warn!("[TTS] spawn `ffmpeg` failed: {e}");
-                let _ = fs::remove_file(&aiff).await;
-                return None;
-            }
-        }
-
-        let bytes = match fs::read(&pcm).await {
-            Ok(v) if !v.is_empty() => v,
-            Ok(_) => {
-                warn!("[TTS] generated empty PCM");
-                let _ = fs::remove_file(&aiff).await;
-                let _ = fs::remove_file(&pcm).await;
-                return None;
-            }
-            Err(e) => {
-                warn!("[TTS] read PCM failed: {e}");
-                let _ = fs::remove_file(&aiff).await;
-                let _ = fs::remove_file(&pcm).await;
-                return None;
-            }
-        };
-
-        let _ = fs::remove_file(&aiff).await;
-        let _ = fs::remove_file(&pcm).await;
-        Some(bytes)
     }
 
     pub async fn process_utterance(
@@ -363,57 +290,26 @@ impl AiProcessor {
 
         // 5. 本地无匹配 → 转发 ZeroClaw（WS 带工具 / Webhook 无工具 / OpenAI 形 /v1）
         match self.zc_relay_mode {
+            ZcRelayMode::Auto => {
+                if self.relay_zeroclaw_ws_chat(&final_command, &net).await? {
+                    return Ok(());
+                }
+                if self.relay_zeroclaw_webhook(&final_command, &net).await? {
+                    return Ok(());
+                }
+                if self.relay_zeroclaw_openai(&final_command, &net).await? {
+                    return Ok(());
+                }
+                info!("[GATEKEEPER] ZeroClaw auto relay exhausted all backends.");
+            }
             ZcRelayMode::WsChat => {
-                self.relay_zeroclaw_ws_chat(&final_command, &net).await?;
+                let _ = self.relay_zeroclaw_ws_chat(&final_command, &net).await?;
             }
             ZcRelayMode::Webhook => {
-                self.relay_zeroclaw_webhook(&final_command, &net).await?;
+                let _ = self.relay_zeroclaw_webhook(&final_command, &net).await?;
             }
             ZcRelayMode::Openai => {
-                let zc_request = CreateChatCompletionRequestArgs::default()
-                    .model(&self.model)
-                    .messages([ChatCompletionRequestUserMessageArgs::default()
-                        .content(final_command)
-                        .build()?
-                        .into()])
-                    .build()?;
-
-                debug!(
-                    target: "hub_server::zeroclaw",
-                    url = %self.zc_client.config().api_base(),
-                    payload = %serde_json::to_string(&zc_request).unwrap_or_else(|e| e.to_string()),
-                    "ZeroClaw chat request (OpenAI-compatible JSON)"
-                );
-
-                match self.zc_client.chat().create(zc_request).await {
-                    Ok(zc_response) => {
-                        debug!(
-                            target: "hub_server::zeroclaw",
-                            body = %serde_json::to_string(&zc_response).unwrap_or_else(|e| e.to_string()),
-                            "ZeroClaw chat response (parsed OK)"
-                        );
-                        let mut reply_text: Option<String> = None;
-                        if let Some(choice) = zc_response.choices.first() {
-                            if let Some(content) = &choice.message.content {
-                                println!("\x1b[36m[ZeroClaw] Agent Response: \"{}\"\x1b[0m", content);
-                                reply_text = Some(content.clone());
-                            }
-                        }
-                        if let Some(reply) = reply_text {
-                            self.speak_reply_and_feedback(&reply, &net).await?;
-                        } else {
-                            Self::send_local_done_cue(&net).await;
-                        }
-                    }
-                    Err(e) => {
-                        error!("[ZC] ZeroClaw chat error: {e:#}");
-                        info!(
-                            "[GATEKEEPER] ZeroClaw relay skipped. \
-                             If deserialization failed, scroll for `failed deserialization of:` (raw body). \
-                             Enable RUST_LOG=hub_server::ai=debug,hub_server::zeroclaw=debug for request JSON."
-                        );
-                    }
-                }
+                let _ = self.relay_zeroclaw_openai(&final_command, &net).await?;
             }
         }
 
@@ -446,12 +342,12 @@ impl AiProcessor {
         &self,
         message: &str,
         net: &std::sync::Arc<Mutex<OwnedWriteHalf>>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let url = match self.build_zeroclaw_ws_url() {
             Ok(u) => u,
             Err(e) => {
                 error!("[ZC] ws: {:#}", e);
-                return Ok(());
+                return Ok(false);
             }
         };
 
@@ -466,12 +362,12 @@ impl AiProcessor {
             Ok(Err(e)) => {
                 error!("[ZC] ws handshake failed: {e:#}");
                 info!("[GATEKEEPER] ZeroClaw ws relay skipped.");
-                return Ok(());
+                return Ok(false);
             }
             Err(_) => {
                 error!("[ZC] ws connect timed out (20s)");
                 info!("[GATEKEEPER] ZeroClaw ws relay skipped.");
-                return Ok(());
+                return Ok(false);
             }
         };
 
@@ -491,28 +387,28 @@ impl AiProcessor {
                 }
                 Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
                     warn!("[ZC] ws closed before session_start");
-                    return Ok(());
+                    return Ok(false);
                 }
                 Ok(Some(Err(e))) => {
                     error!("[ZC] ws read: {e:#}");
-                    return Ok(());
+                    return Ok(false);
                 }
                 Ok(Some(Ok(_))) => continue,
                 Err(_) => {
                     warn!("[ZC] ws timeout waiting for first server text frame");
-                    return Ok(());
+                    return Ok(false);
                 }
             }
         }
         if !got_server_text {
             warn!("[ZC] ws no server text frame after initial reads");
-            return Ok(());
+            return Ok(false);
         }
 
         let outgoing = serde_json::json!({ "type": "message", "content": message }).to_string();
         if let Err(e) = write.send(Message::Text(outgoing.into())).await {
             error!("[ZC] ws send message: {e:#}");
-            return Ok(());
+            return Ok(false);
         }
 
         let turn = async {
@@ -632,9 +528,10 @@ impl AiProcessor {
             } else {
                 Self::send_local_done_cue(net).await;
             }
+            return Ok(true);
         }
 
-        Ok(())
+        Ok(false)
     }
 
     /// `POST /webhook` — ZeroClaw Gateway（见 upstream `WebhookBody` / `handle_webhook`）。
@@ -642,7 +539,7 @@ impl AiProcessor {
         &self,
         message: &str,
         net: &std::sync::Arc<Mutex<OwnedWriteHalf>>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let payload = serde_json::json!({ "message": message });
         debug!(
             target: "hub_server::zeroclaw",
@@ -670,7 +567,7 @@ impl AiProcessor {
             Err(e) => {
                 error!("[ZC] webhook transport error: {e:#}");
                 info!("[GATEKEEPER] ZeroClaw webhook relay skipped.");
-                return Ok(());
+                return Ok(false);
             }
         };
 
@@ -686,26 +583,26 @@ impl AiProcessor {
         if !status.is_success() {
             error!("[ZC] webhook HTTP {} — {}", status, body_text);
             info!("[GATEKEEPER] ZeroClaw webhook relay skipped.");
-            return Ok(());
+            return Ok(false);
         }
 
         let v: serde_json::Value = match serde_json::from_str(&body_text) {
             Ok(v) => v,
             Err(e) => {
                 error!("[ZC] webhook JSON parse error: {e:#} body={body_text:?}");
-                return Ok(());
+                return Ok(false);
             }
         };
 
         if let Some(err) = v.get("error").and_then(|x| x.as_str()) {
             error!("[ZC] webhook error field: {}", err);
             info!("[GATEKEEPER] ZeroClaw webhook relay skipped.");
-            return Ok(());
+            return Ok(false);
         }
 
         if v.get("status").and_then(|x| x.as_str()) == Some("duplicate") {
             info!("[ZC] webhook idempotent duplicate — no new reply");
-            return Ok(());
+            return Ok(true);
         }
 
         let reply = v
@@ -734,7 +631,60 @@ impl AiProcessor {
         } else {
             Self::send_local_done_cue(net).await;
         }
-        Ok(())
+        Ok(true)
+    }
+
+    async fn relay_zeroclaw_openai(
+        &self,
+        message: &str,
+        net: &std::sync::Arc<Mutex<OwnedWriteHalf>>,
+    ) -> Result<bool> {
+        let zc_request = CreateChatCompletionRequestArgs::default()
+            .model(&self.model)
+            .messages([ChatCompletionRequestUserMessageArgs::default()
+                .content(message)
+                .build()?
+                .into()])
+            .build()?;
+
+        debug!(
+            target: "hub_server::zeroclaw",
+            url = %self.zc_client.config().api_base(),
+            payload = %serde_json::to_string(&zc_request).unwrap_or_else(|e| e.to_string()),
+            "ZeroClaw chat request (OpenAI-compatible JSON)"
+        );
+
+        match self.zc_client.chat().create(zc_request).await {
+            Ok(zc_response) => {
+                debug!(
+                    target: "hub_server::zeroclaw",
+                    body = %serde_json::to_string(&zc_response).unwrap_or_else(|e| e.to_string()),
+                    "ZeroClaw chat response (parsed OK)"
+                );
+                let mut reply_text: Option<String> = None;
+                if let Some(choice) = zc_response.choices.first() {
+                    if let Some(content) = &choice.message.content {
+                        println!("\x1b[36m[ZeroClaw] Agent Response: \"{}\"\x1b[0m", content);
+                        reply_text = Some(content.clone());
+                    }
+                }
+                if let Some(reply) = reply_text {
+                    self.speak_reply_and_feedback(&reply, net).await?;
+                } else {
+                    Self::send_local_done_cue(net).await;
+                }
+                Ok(true)
+            }
+            Err(e) => {
+                error!("[ZC] ZeroClaw chat error: {e:#}");
+                info!(
+                    "[GATEKEEPER] ZeroClaw relay skipped. \
+                     If deserialization failed, scroll for `failed deserialization of:` (raw body). \
+                     Enable RUST_LOG=hub_server::ai=debug,hub_server::zeroclaw=debug for request JSON."
+                );
+                Ok(false)
+            }
+        }
     }
 
     /// 本地指令路由器。

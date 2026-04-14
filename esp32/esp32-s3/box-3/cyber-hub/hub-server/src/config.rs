@@ -3,12 +3,27 @@ use std::env;
 /// How `hub-server` forwards text to ZeroClaw Gateway.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZcRelayMode {
+    /// Auto-detect and fallback: ws_chat -> webhook -> openai.
+    Auto,
     /// `GET /ws/chat` WebSocket — full agent with tools (`turn_streamed`). Preferred for CyberHub.
     WsChat,
     /// `POST /webhook` — upstream uses **no tools** (`run_gateway_chat_simple`); chat-only.
     Webhook,
     /// OpenAI-shaped `POST …/v1/chat/completions` via `async-openai` (only if Gateway mounts `/v1`).
     Openai,
+}
+
+/// Text-to-speech backend selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TtsBackend {
+    /// Auto-detect runtime capabilities by OS + available binaries.
+    Auto,
+    /// macOS `say` + `ffmpeg`.
+    MacSay,
+    /// Piper CLI (cross-platform local TTS).
+    Piper,
+    /// Disable runtime TTS synthesis (fallback to done cue only).
+    None,
 }
 
 #[derive(Clone, Debug)]
@@ -32,12 +47,17 @@ pub struct AppConfig {
     pub zc_ws_session_name: Option<String>,
     /// Whether to synthesize ZeroClaw text reply and stream downlink PCM to BOX-3.
     pub enable_tts_feedback: bool,
+    pub tts_backend: TtsBackend,
     /// macOS `say` voice name, e.g. Tingting / Sin-ji / Mei-Jia.
     pub tts_voice: String,
     /// macOS `say -r` speed.
     pub tts_rate: u32,
     /// Truncate long LLM replies before local TTS generation.
     pub tts_max_chars: usize,
+    /// Piper binary path when `tts_backend=piper`.
+    pub tts_piper_cmd: String,
+    /// Piper model path when `tts_backend=piper`.
+    pub tts_piper_model: String,
     pub stt_threshold: f64,
     pub stt_model_path: String,
     pub use_internal_stt: bool,
@@ -49,20 +69,32 @@ impl AppConfig {
         dotenv::dotenv().ok();
 
         let zc_relay_mode = match env::var("ZEROCLAW_MODE")
-            .unwrap_or_else(|_| "ws_chat".to_string())
+            .unwrap_or_else(|_| "auto".to_string())
             .to_ascii_lowercase()
             .as_str()
         {
+            "auto" => ZcRelayMode::Auto,
             "openai" => ZcRelayMode::Openai,
             "webhook" => ZcRelayMode::Webhook,
             "ws" | "ws_chat" | "websocket" => ZcRelayMode::WsChat,
-            _ => ZcRelayMode::WsChat,
+            _ => ZcRelayMode::Auto,
         };
 
         let zc_ws_session_id = match env::var("ZEROCLAW_WS_SESSION_ID") {
             Ok(s) if s.trim().is_empty() => None,
             Ok(s) => Some(s),
             Err(_) => Some("cyber-hub".to_string()),
+        };
+
+        let tts_backend = match env::var("TTS_BACKEND")
+            .unwrap_or_else(|_| "auto".to_string())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "none" | "off" | "disabled" => TtsBackend::None,
+            "piper" => TtsBackend::Piper,
+            "auto" => TtsBackend::Auto,
+            _ => TtsBackend::MacSay,
         };
 
         Self {
@@ -87,6 +119,7 @@ impl AppConfig {
             enable_tts_feedback: env::var("ENABLE_TTS_FEEDBACK")
                 .unwrap_or_else(|_| "true".to_string())
                 == "true",
+            tts_backend,
             tts_voice: env::var("TTS_VOICE").unwrap_or_else(|_| "Tingting".to_string()),
             tts_rate: env::var("TTS_RATE")
                 .unwrap_or_else(|_| "180".to_string())
@@ -96,6 +129,8 @@ impl AppConfig {
                 .unwrap_or_else(|_| "180".to_string())
                 .parse()
                 .unwrap_or(180),
+            tts_piper_cmd: env::var("TTS_PIPER_CMD").unwrap_or_else(|_| "piper".to_string()),
+            tts_piper_model: env::var("TTS_PIPER_MODEL").unwrap_or_else(|_| "".to_string()),
             stt_threshold: env::var("VAD_THRESHOLD")
                 .unwrap_or_else(|_| "2500.0".to_string())
                 .parse()

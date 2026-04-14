@@ -55,7 +55,7 @@ BOX-3  TCP :8080 (可配)          hub-server                 ZeroClaw Gateway :
 | 变量 | 含义 |
 |------|------|
 | `SERVER_PORT` | TCP 监听端口（与设备连接 `IP:PORT` 一致） |
-| `ZEROCLAW_MODE` | **`ws_chat`**（默认，带工具）· `webhook`（无工具）· `openai` |
+| `ZEROCLAW_MODE` | **`auto`**（默认，自动按 `ws_chat -> webhook -> openai` 回退）· `ws_chat` · `webhook` · `openai` |
 | `ZEROCLAW_WS_CHAT_URL` | WebSocket URL **不含 query**（默认 `ws://127.0.0.1:42617/ws/chat`）；`token` / `session_id` 由程序追加 |
 | `ZEROCLAW_WS_SESSION_ID` | 默认 `cyber-hub`；设为空字符串则每次连接新会话（无跨轮 Gateway 记忆） |
 | `ZEROCLAW_WS_SESSION_NAME` | 可选；对应 WS 查询参数 `name` |
@@ -64,7 +64,9 @@ BOX-3  TCP :8080 (可配)          hub-server                 ZeroClaw Gateway :
 | `ZEROCLAW_URL` | 仅 **`openai`**：`async-openai` 的 Base |
 | `ZEROCLAW_API_KEY` | Gateway **`Authorization: Bearer`**（`POST /pair` 配对后得到的 token；默认占位 `zeroclaw` 通常无效） |
 | `ENABLE_TTS_FEEDBACK` | `true` 时将 ZeroClaw 文本回复在 Mac 端转为 PCM，并通过 `MSG_FEEDBACK` payload 下发到设备播放 |
-| `TTS_VOICE` / `TTS_RATE` / `TTS_MAX_CHARS` | 本地 TTS 参数（macOS `say` 语音、语速、最大朗读字符数） |
+| `TTS_BACKEND` | `auto`（默认，按系统与可执行自动选）/ `mac_say` / `piper` / `none` |
+| `TTS_VOICE` / `TTS_RATE` / `TTS_MAX_CHARS` | `mac_say` 参数（语音、语速、最大朗读字符数） |
+| `TTS_PIPER_CMD` / `TTS_PIPER_MODEL` | `piper` 参数（可执行路径、模型 `.onnx` 路径） |
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | 对外 STT 或备用 LLM（视 `USE_INTERNAL_STT`） |
 | `USE_INTERNAL_STT` | `true`：本地 Whisper；`false`：API 转写 |
 | `STT_MODEL_PATH` | 本地 Whisper 模型路径 |
@@ -75,7 +77,7 @@ BOX-3  TCP :8080 (可配)          hub-server                 ZeroClaw Gateway :
 ```bash
 cd hub-server
 cp .env.example .env   # 首次
-cargo run --release --bin hub-server
+cargo run --release
 ```
 
 ## 与 PRD 任务对照

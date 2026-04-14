@@ -3,7 +3,40 @@ use std::process::Command;
 
 // ── 锁屏 ────────────────────────────────────────────────────────────────────
 
+pub fn trigger_lock() {
+    #[cfg(target_os = "macos")]
+    {
+        trigger_macos_lock_inner();
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if try_run_cmd("loginctl", &["lock-session"]) {
+            return;
+        }
+        warn!("[LOCK] linux lock command not available");
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if try_run_cmd("rundll32.exe", &["user32.dll,LockWorkStation"]) {
+            return;
+        }
+        warn!("[LOCK] windows lock command not available");
+        return;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        warn!("[LOCK] unsupported platform");
+    }
+}
+
 pub fn trigger_macos_lock() {
+    trigger_lock();
+}
+
+#[cfg(target_os = "macos")]
+fn trigger_macos_lock_inner() {
     info!("[COMMAND] Lock Screen triggered!");
 
     let private_api_success = unsafe {
@@ -41,35 +74,103 @@ pub fn trigger_macos_lock() {
 /// 音量调大（+10，上限 100）
 pub fn volume_up() {
     info!("[COMMAND] Volume Up triggered!");
-    run_applescript_lines(&[
-        "set curVol to output volume of (get volume settings)",
-        "set newVol to curVol + 10",
-        "if newVol > 100 then set newVol to 100",
-        "set volume output volume newVol",
-    ]);
+    #[cfg(target_os = "macos")]
+    {
+        run_applescript_lines(&[
+            "set curVol to output volume of (get volume settings)",
+            "set newVol to curVol + 10",
+            "if newVol > 100 then set newVol to 100",
+            "set volume output volume newVol",
+        ]);
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if try_run_cmd("pactl", &["set-sink-volume", "@DEFAULT_SINK@", "+10%"]) {
+            return;
+        }
+        if try_run_cmd("amixer", &["-D", "pulse", "sset", "Master", "10%+"]) {
+            return;
+        }
+        warn!("[VOLUME] linux volume up command not available");
+        return;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    warn!("[VOLUME] unsupported platform for volume up");
 }
 
 /// 音量调小（-10，下限 0）
 pub fn volume_down() {
     info!("[COMMAND] Volume Down triggered!");
-    run_applescript_lines(&[
-        "set curVol to output volume of (get volume settings)",
-        "set newVol to curVol - 10",
-        "if newVol < 0 then set newVol to 0",
-        "set volume output volume newVol",
-    ]);
+    #[cfg(target_os = "macos")]
+    {
+        run_applescript_lines(&[
+            "set curVol to output volume of (get volume settings)",
+            "set newVol to curVol - 10",
+            "if newVol < 0 then set newVol to 0",
+            "set volume output volume newVol",
+        ]);
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if try_run_cmd("pactl", &["set-sink-volume", "@DEFAULT_SINK@", "-10%"]) {
+            return;
+        }
+        if try_run_cmd("amixer", &["-D", "pulse", "sset", "Master", "10%-"]) {
+            return;
+        }
+        warn!("[VOLUME] linux volume down command not available");
+        return;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    warn!("[VOLUME] unsupported platform for volume down");
 }
 
 /// 静音
 pub fn mute() {
     info!("[COMMAND] Mute triggered!");
-    run_applescript("set volume with output muted");
+    #[cfg(target_os = "macos")]
+    {
+        run_applescript("set volume with output muted");
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if try_run_cmd("pactl", &["set-sink-mute", "@DEFAULT_SINK@", "1"]) {
+            return;
+        }
+        if try_run_cmd("amixer", &["-D", "pulse", "sset", "Master", "mute"]) {
+            return;
+        }
+        warn!("[VOLUME] linux mute command not available");
+        return;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    warn!("[VOLUME] unsupported platform for mute");
 }
 
 /// 取消静音
 pub fn unmute() {
     info!("[COMMAND] Unmute triggered!");
-    run_applescript("set volume without output muted");
+    #[cfg(target_os = "macos")]
+    {
+        run_applescript("set volume without output muted");
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if try_run_cmd("pactl", &["set-sink-mute", "@DEFAULT_SINK@", "0"]) {
+            return;
+        }
+        if try_run_cmd("amixer", &["-D", "pulse", "sset", "Master", "unmute"]) {
+            return;
+        }
+        warn!("[VOLUME] linux unmute command not available");
+        return;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    warn!("[VOLUME] unsupported platform for unmute");
 }
 
 // ── 内部工具 ─────────────────────────────────────────────────────────────────
@@ -92,5 +193,17 @@ fn run_applescript_lines(lines: &[&str]) {
         }
         Err(e) => error!("[CONTROL] osascript failed to spawn: {}", e),
         _ => {}
+    }
+}
+
+fn try_run_cmd(bin: &str, args: &[&str]) -> bool {
+    match Command::new(bin).args(args).output() {
+        Ok(out) if out.status.success() => true,
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            warn!("[CONTROL] {} {:?} failed: {}", bin, args, stderr.trim());
+            false
+        }
+        Err(_) => false,
     }
 }

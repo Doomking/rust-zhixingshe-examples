@@ -5,6 +5,7 @@ authors = ["Gustaf"]
 edition = "2021"
 resolver = "2"
 rust-version = "1.77"
+default-run = "cyber-hub-std"
 
 [features]
 default = ["std", "esp-idf-svc/native"]
