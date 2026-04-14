@@ -99,7 +99,7 @@
 ### 🔴 Phase 3: 注入灵魂 (音频流与 ZeroClaw)
 * **目标：** 彻底打通语音数据链路，接入 AI Agent。
 * **Task 3.1:** 配置 I2S 麦克风录音，将按下按键期间的声音保存并在 Mac 上播放（验证音频质量）。
-* **Task 3.2:** 在 Mac 上部署 ZeroClaw，并写一个中间层（或直接开发 ZeroClaw 插件）接收音频流。
+* **Task 3.2:** 在 Mac 上部署 ZeroClaw，并写一个中间层（或直接开发 ZeroClaw 插件）接收音频流。**（已落地：** Rust 服务 `hub-server`，TCP 帧协议网关为 `hub-server/src/gateway/mod.rs`，运行说明见 `hub-server/README.md`；ZeroClaw 走 OpenAI 兼容 `ZEROCLAW_URL`。**）**
 * **Task 3.3:** 联调 Whisper 与 ZeroClaw 逻辑，实现“语音指令 -> Agent 思考 -> Mac 文本/动作反馈”。
 * **Task 3.4:** 打通最后的 TTS 回传链路，让 BOX-3 开口说话。
 

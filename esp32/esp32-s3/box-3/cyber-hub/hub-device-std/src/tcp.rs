@@ -103,6 +103,10 @@ pub fn tcp_thread() {
                                 debug!("[PLAYBACK] received done cue from server");
                                 enqueue_playback_pcm(COMMAND_DONE_PCM.to_vec());
                             }
+                            crate::protocol::MSG_FEEDBACK => {
+                                debug!("[PLAYBACK] received {} bytes downlink PCM", payload.len());
+                                enqueue_playback_pcm(payload.to_vec());
+                            }
                             _ => {}
                         }
                     }
