@@ -1,4 +1,5 @@
 use std::env;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How `hub-server` forwards text to ZeroClaw Gateway.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +43,8 @@ pub struct AppConfig {
     pub zc_webhook_secret: Option<String>,
     /// WebSocket URL without query (e.g. `ws://127.0.0.1:42617/ws/chat`); `token` / `session_id` appended by hub-server.
     pub zc_ws_chat_url: String,
-    /// Stable session for multi-turn on BOX-3; `None` = omit (new UUID each connection).
+    /// Session id used by ZeroClaw `ws/chat`.
+    /// If unset in env, we generate one per hub-server process startup.
     pub zc_ws_session_id: Option<String>,
     pub zc_ws_session_name: Option<String>,
     /// Whether to synthesize ZeroClaw text reply and stream downlink PCM to BOX-3.
@@ -65,6 +67,14 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    fn make_startup_session_id() -> String {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        format!("cyber-hub-{now_ms}-{}", std::process::id())
+    }
+
     pub fn from_env() -> Self {
         dotenv::dotenv().ok();
 
@@ -83,7 +93,7 @@ impl AppConfig {
         let zc_ws_session_id = match env::var("ZEROCLAW_WS_SESSION_ID") {
             Ok(s) if s.trim().is_empty() => None,
             Ok(s) => Some(s),
-            Err(_) => Some("cyber-hub".to_string()),
+            Err(_) => Some(Self::make_startup_session_id()),
         };
 
         let tts_backend = match env::var("TTS_BACKEND")

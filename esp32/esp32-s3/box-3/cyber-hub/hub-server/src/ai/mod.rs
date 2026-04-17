@@ -288,6 +288,8 @@ impl AiProcessor {
             return Ok(());
         }
 
+        info!("zc_relay_mode: {:?}", self.zc_relay_mode);
+
         // 5. 本地无匹配 → 转发 ZeroClaw（WS 带工具 / Webhook 无工具 / OpenAI 形 /v1）
         match self.zc_relay_mode {
             ZcRelayMode::Auto => {
