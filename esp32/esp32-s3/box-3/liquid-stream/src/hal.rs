@@ -3,10 +3,12 @@ use esp_idf_svc::hal::{gpio, spi, i2c, delay::Ets, peripherals::Peripherals, uni
 use mipidsi::{models::ILI9342CRgb565, options::{Orientation, Rotation, ColorOrder}, Display};
 use display_interface_spi::SPIInterface;
 
-pub type AppDisplay = Display<SPIInterface<spi::SpiDeviceDriver<'static, spi::SpiDriver<'static>>, gpio::PinDriver<'static, gpio::Output>>, ILI9342CRgb565, mipidsi::NoResetPin>;
+pub type AppSpi = spi::SpiDeviceDriver<'static, spi::SpiDriver<'static>>;
+pub type AppDc = gpio::PinDriver<'static, gpio::Output>;
 
 pub struct Hardware {
-    pub display: AppDisplay,
+    pub spi: AppSpi,
+    pub dc: AppDc,
     pub i2c0: i2c::I2cDriver<'static>,
     pub rst: gpio::PinDriver<'static, gpio::Output>,
     pub backlight: gpio::PinDriver<'static, gpio::Output>,
@@ -22,7 +24,7 @@ pub fn init_hardware(peripherals: Peripherals) -> anyhow::Result<Hardware> {
         pins.gpio7, // SCK 
         pins.gpio6, // MOSI
         Option::<gpio::AnyIOPin>::None, // MISO
-        &spi::SpiDriverConfig::new(),
+        &spi::SpiDriverConfig::new().dma(spi::Dma::Auto(32768)),
     )?;
 
     let spi_device = spi::SpiDeviceDriver::new(spi_driver, Some(pins.gpio5), &spi_config)?;
@@ -32,8 +34,6 @@ pub fn init_hardware(peripherals: Peripherals) -> anyhow::Result<Hardware> {
     let mut rst = gpio::PinDriver::output(pins.gpio48)?;
     let mut delay = Ets;
 
-    // BOX-3 特殊复位链路：需要手动发出高脉冲，然后长期拉低 (Active High Reset)
-    // 如果交由 mipidsi::Builder 的 reset_pin 处理，它会按照 Active Low 的默认习惯将引脚永久拉高，导致屏幕一直被锁死在复位状态（白屏）。
     rst.set_high()?;
     esp_idf_svc::hal::delay::FreeRtos::delay_ms(20);
     rst.set_low()?;
@@ -45,6 +45,10 @@ pub fn init_hardware(peripherals: Peripherals) -> anyhow::Result<Hardware> {
         .init(&mut delay)
         .map_err(|_| anyhow::anyhow!("Display init failed"))?;
 
+    // Extract the raw SPI interface
+    let (di, _model, _rst_pin) = display.release();
+    let (spi, dc) = di.release();
+
     let mut backlight = gpio::PinDriver::output(pins.gpio47)?;
     backlight.set_high()?;
 
@@ -52,5 +56,5 @@ pub fn init_hardware(peripherals: Peripherals) -> anyhow::Result<Hardware> {
     let i2c0_config = i2c::I2cConfig::new().baudrate(100_u32.kHz().into());
     let i2c0 = i2c::I2cDriver::new(peripherals.i2c0, pins.gpio8, pins.gpio18, &i2c0_config)?;
 
-    Ok(Hardware { display, i2c0, rst, backlight })
+    Ok(Hardware { spi, dc, i2c0, rst, backlight })
 }

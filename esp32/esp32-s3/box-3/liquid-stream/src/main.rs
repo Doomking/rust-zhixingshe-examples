@@ -21,7 +21,6 @@ fn main() -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
     let mut hw = hal::init_hardware(peripherals)?;
 
-    hw.display.clear(Rgb565::BLACK).map_err(|_| anyhow::anyhow!("Clear failed"))?;
     info!("Display initialized.");
 
     let imu_input = sensor::start_imu_thread(hw.i2c0);
@@ -55,7 +54,7 @@ fn main() -> anyhow::Result<()> {
         let physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
 
         // 3. 渲染引擎读取状态并擦写显存
-        render_engine.render_fluid(&mut hw.display, &fluid)?;
+        render_engine.render_fluid(&mut hw.spi, &mut hw.dc, &fluid)?;
         let frame_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
         tick_counter += 1;
 

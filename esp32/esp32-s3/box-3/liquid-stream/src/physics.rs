@@ -267,7 +267,7 @@ impl FluidSim {
         self.v_save.copy_from_slice(&self.v);
 
         // 使用 20 次迭代，保证网格层面流体的宏观不可压缩性
-        self.solve_incompressibility(20);
+        self.solve_incompressibility(10);
 
         self.enforce_boundary_conditions();
         self.transfer_to_particles();
@@ -275,7 +275,7 @@ impl FluidSim {
 
         // PBF 粒子排斥，防止由于重力和 FLIP 限制导致的所有粒子压成一团
         // 采用 3 次强力迭代，绝对锁定水滴的物理体积
-        self.push_particles_apart(3);
+        self.push_particles_apart(2);
     }
 
     fn enforce_boundary_conditions(&mut self) {

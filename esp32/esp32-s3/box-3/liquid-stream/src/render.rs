@@ -7,6 +7,8 @@ use log::info;
 use std::time::Instant;
 
 use crate::physics::FluidSim;
+use crate::hal::{AppSpi, AppDc};
+use esp_idf_svc::hal::spi::SpiDeviceDriver;
 
 /// 全屏 565 缓冲（与 mipidsi fill_contiguous 一致）
 pub struct FrameBuffer {
@@ -65,10 +67,7 @@ impl RenderEngine {
 
     /// 参考 assets/output.gif：**每个粒子**是屏上独立亮青点（亚像素抖动、不按 10px 格对齐），
     /// 绝不把整格涂成俄罗斯方块；与「粒子不重叠」的物理斥力一致。
-    pub fn render_fluid<D>(&mut self, display: &mut D, fluid: &FluidSim) -> anyhow::Result<()>
-    where
-        D: DrawTarget<Color = Rgb565>,
-        D::Error: std::fmt::Debug,
+    pub fn render_fluid(&mut self, spi: &mut AppSpi, dc: &mut AppDc, fluid: &FluidSim) -> anyhow::Result<()>
     {
         let frame_start = Instant::now();
         let fb_w = self.fb.width as i32;
@@ -77,36 +76,9 @@ impl RenderEngine {
 
         buf.fill(0x0000);
 
-        let (nx, ny) = fluid.grid_dim();
-        let cell = fluid.cell_size().round() as i32;
-        // 含最外圈固体格，屏上能读到「容器」；否则粒子在隐形边界反弹，会像往虚空里落沙
-        for gy in 0..ny {
-            for gx in 0..nx {
-                if !fluid.is_solid(gx, gy) {
-                    continue;
-                }
-                // 不绘制隐藏用于文字碰撞的内部宏观网格
-                if gy >= 10 && gy <= 13 && gx >= 8 && gx <= 23 {
-                    continue;
-                }
-                let x0 = (gx as i32 * cell).max(0);
-                let y0 = (gy as i32 * cell).max(0);
-                let x1 = ((gx + 1) as i32 * cell).min(fb_w);
-                let y1 = ((gy + 1) as i32 * cell).min(fb_h);
-                for py in y0..y1 {
-                    for px in x0..x1 {
-                        if px >= 0 && px < fb_w && py >= 0 && py < fb_h {
-                            let o = (py * fb_w + px) as usize;
-                            if buf[o] < Self::OB {
-                                buf[o] = Self::OB;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // 不再绘制物理底层默认的网格边界，避免在屏幕四周产生难看的紫色/灰色边框
 
-        const C_WATER: u16 = 0x05de; // 统一的科技蓝水色
+        const C_WATER: u16 = 0xde05; // 0x05de.to_be() // 统一的科技蓝水色
 
         for p in fluid.particles() {
             let px = p.position.x as i32;
@@ -129,9 +101,9 @@ impl RenderEngine {
         let box_x1 = 236;
         let box_y1 = 136;
         
-        let c_glass: u16 = 0x0024; // 极幽暗的深蓝色
-        let c_border: u16 = 0x03E0; // 暗青色边框
-        let c_corner: u16 = 0x07ff; // 高亮青色四角
+        let c_glass: u16 = 0x2400; // 0x0024.to_be() // 极幽暗的深蓝色
+        let c_border: u16 = 0xE003; // 0x03E0.to_be() // 暗青色边框
+        let c_corner: u16 = 0xff07; // 0x07ff.to_be() // 高亮青色四角
         
         for py in box_y0..box_y1 {
             for px in box_x0..box_x1 {
@@ -161,7 +133,7 @@ impl RenderEngine {
         }
 
         // --- 绘制中心发光文字 "无限光河" 作为物理障碍的可视化 ---
-        const C_NEON_CYAN: u16 = 0x07ff; // 发光青色
+        const C_NEON_CYAN: u16 = 0xff07; // 0x07ff.to_be() // 发光青色
         const TEXT_W: i32 = 16;
         const TEXT_H: i32 = 16;
         const CHARS: [[u16; 16]; 4] = [
@@ -202,12 +174,24 @@ impl RenderEngine {
             }
         }
 
-        display
-            .fill_contiguous(
-                &Rectangle::new(Point::zero(), Size::new(self.fb.width, self.fb.height)),
-                self.fb.buf.iter().map(|&raw| Rgb565::from(RawU16::new(raw))),
+        // --- RAW SPI DMA BLIT ---
+        // ILI9342C RAMWR command
+        dc.set_low().map_err(|e| anyhow::anyhow!("DC low error: {:?}", e))?;
+        spi.write(&[0x2C]).map_err(|e| anyhow::anyhow!("SPI cmd error: {:?}", e))?;
+        dc.set_high().map_err(|e| anyhow::anyhow!("DC high error: {:?}", e))?;
+
+        // 强转为 byte slice，利用配置好的大 chunk size 进行底层 DMA 发送
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                self.fb.buf.as_ptr() as *const u8,
+                self.fb.buf.len() * 2,
             )
-            .map_err(|e| anyhow::anyhow!("DMA Flush Error: {:?}", e))?;
+        };
+        
+        let chunk_size = 32768;
+        for chunk in bytes.chunks(chunk_size) {
+            spi.write(chunk).map_err(|e| anyhow::anyhow!("SPI write error: {:?}", e))?;
+        }
 
         self.last_render_cost_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
         self.fps_counter += 1;
