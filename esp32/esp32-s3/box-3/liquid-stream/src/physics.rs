@@ -139,10 +139,17 @@ impl FluidSim {
             self.cell_flags[(self.ny - 1) * self.nx + i] = SOLID; // bottom
         }
         for j in 0..self.ny {
-            self.cell_flags[j * self.nx] = SOLID; // left
-            self.cell_flags[j * self.nx + self.nx - 1] = SOLID; // right
+            self.cell_flags[j * self.nx] = SOLID;
+            self.cell_flags[j * self.nx + self.nx - 1] = SOLID;
         }
 
+        // 隐藏的宏观物理墙，用于让流体自然绕开文字区域
+        // 文字区域对应的宏观坐标大致为 x:8..23, y:10..13
+        for y in 10..14 {
+            for x in 8..24 {
+                self.cell_flags[y * self.nx + x] = SOLID;
+            }
+        }
     }
 
     pub fn grid_dim(&self) -> (usize, usize) {
@@ -412,15 +419,32 @@ impl FluidSim {
             // 动能回写
             let u_flip = p.velocity.x + u_flip_diff;
             let v_flip = p.velocity.y + v_flip_diff;
-            self.particles[i].velocity.x = flip_ratio * u_flip + (1.0 - flip_ratio) * u_pic;
-            self.particles[i].velocity.y = flip_ratio * v_flip + (1.0 - flip_ratio) * v_pic;
+            let mut new_vx = flip_ratio * u_flip + (1.0 - flip_ratio) * u_pic;
+            let mut new_vy = flip_ratio * v_flip + (1.0 - flip_ratio) * v_pic;
+
+            // 限制最大速度，防止边界箝位与挤压带来的数值爆炸
+            let max_v = 1000.0;
+            let v_sq = new_vx * new_vx + new_vy * new_vy;
+            if v_sq > max_v * max_v {
+                let scale = max_v / v_sq.sqrt();
+                new_vx *= scale;
+                new_vy *= scale;
+            }
+
+            self.particles[i].velocity.x = new_vx;
+            self.particles[i].velocity.y = new_vy;
         }
     }
 
     fn advect_particles(&mut self, dt: f32) {
-        for p in &mut self.particles {
-            p.position += p.velocity * dt;
+        let steps = 3;
+        let dt_sub = dt / steps as f32;
 
+        for p in &mut self.particles {
+            for _ in 0..steps {
+                p.position += p.velocity * dt_sub;
+            }
+            
             // 极限约束，防止数值误差导致粒子飞出网格导致内存越界
             // 这里保留了 1.01 * h 的安全边界，确保粒子中心始终处于流体网格内部的非 SOLID 区域
             let margin_x = self.h * 1.01;
@@ -454,6 +478,7 @@ impl FluidSim {
                 cx = cx.clamp(0, (sc as i32) - 1);
                 cy = cy.clamp(0, (sr as i32) - 1);
                 let bidx = (cy as usize) * sc + (cx as usize);
+
                 self.sep_next[i] = self.sep_head[bidx];
                 self.sep_head[bidx] = i as i32;
             }
@@ -473,12 +498,14 @@ impl FluidSim {
                             continue;
                         }
                         let nidx = (ny as usize) * sc + (nx as usize);
+                        let mut count = 0;
                         let mut j = self.sep_head[nidx];
-                        while j >= 0 {
+                        while j >= 0 && count < 10 {
                             let ju = j as usize;
                             if ju > i {
                                 self.separate_pair(i, ju, overlap_threshold, target);
                             }
+                            count += 1;
                             j = self.sep_next[ju];
                         }
                     }
@@ -491,6 +518,20 @@ impl FluidSim {
         for p in &mut self.particles {
             p.position.x = p.position.x.clamp(self.h * 1.01, w - self.h * 1.01);
             p.position.y = p.position.y.clamp(self.h * 1.01, h - self.h * 1.01);
+
+            // 强制将粒子推离文字的粗略边界框，防止卡死
+            if p.position.x > 76.0 && p.position.x < 236.0 && p.position.y > 96.0 && p.position.y < 136.0 {
+                let dx1 = p.position.x - 76.0;
+                let dx2 = 236.0 - p.position.x;
+                let dy1 = p.position.y - 96.0;
+                let dy2 = 136.0 - p.position.y;
+                
+                let min_d = dx1.min(dx2).min(dy1).min(dy2);
+                if min_d == dx1 { p.position.x = 76.0; p.velocity.x *= -0.5; }
+                else if min_d == dx2 { p.position.x = 236.0; p.velocity.x *= -0.5; }
+                else if min_d == dy1 { p.position.y = 96.0; p.velocity.y *= -0.5; }
+                else { p.position.y = 136.0; p.velocity.y *= -0.5; }
+            }
         }
     }
 
