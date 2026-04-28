@@ -17,15 +17,17 @@ use std::thread;
 use std::time::SystemTime;
 
 use cyber_hub_std::audio::{audio_thread, CodecConfig};
-use cyber_hub_std::init_playback_pipe;
 pub use cyber_hub_std::get_status;
 use cyber_hub_std::imu::imu_thread;
+use cyber_hub_std::init_playback_pipe;
 use cyber_hub_std::sensor::sensor_thread;
 use cyber_hub_std::tcp::tcp_thread;
 use cyber_hub_std::weather::weather_thread;
 use cyber_hub_std::wifi::connect_wifi;
 
-use cyber_hub_std::display::{draw_cyber_hub_ui, draw_dashboard, draw_voice_screen, flush_framebuffer, FrameBuffer};
+use cyber_hub_std::display::{
+    draw_cyber_hub_ui, draw_dashboard, draw_voice_screen, flush_framebuffer, FrameBuffer,
+};
 
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -201,6 +203,10 @@ fn main() -> anyhow::Result<()> {
         }
         let _ = flush_framebuffer(&mut display, &fb);
         let is_voice_active = status_ref.read().map_or(false, |s| s.voice_state != 0);
-        thread::sleep(std::time::Duration::from_millis(if is_voice_active { 50 } else { 200 }));
+        thread::sleep(std::time::Duration::from_millis(if is_voice_active {
+            50
+        } else {
+            200
+        }));
     }
 }
