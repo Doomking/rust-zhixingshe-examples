@@ -103,6 +103,8 @@ pub async fn handle_device_connection(
                 crate::protocol::MSG_VOICE_DATA => {
                     if !payload.is_empty() {
                         if let Some(wav_path) = audio_processor.process_data(payload)? {
+                            // Refresh wake window at the end of speech so long speech + STT time doesn't expire the window
+                            ai_processor.notify_wakeup();
                             let ai_ptr = ai_processor.clone();
                             let wr_ai = wr.clone();
                             tokio::spawn(async move {
@@ -117,6 +119,8 @@ pub async fn handle_device_connection(
                 crate::protocol::MSG_VOICE_END => {
                     info!("[PKT] Voice Session End");
                     if let Some(wav_path) = audio_processor.stop_manual_session()? {
+                        // Refresh wake window at the end of speech so long speech + STT time doesn't expire the window
+                        ai_processor.notify_wakeup();
                         let ai_ptr = ai_processor.clone();
                         let wr_ai = wr.clone();
                         tokio::spawn(async move {

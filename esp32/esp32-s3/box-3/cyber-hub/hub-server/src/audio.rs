@@ -56,6 +56,13 @@ impl AudioProcessor {
         let mut finished_utterance = None;
 
         if !samples.is_empty() {
+            // In manual mode, we rely on 0x12 to stop.
+            // The 3000ms timeout is kept as a fallback if 0x12 is lost.
+            // Check this BEFORE processing new samples so we don't write new audio to the old file.
+            if self.is_speaking && self.last_activity.elapsed().as_millis() > 3000 {
+                finished_utterance = self.stop_manual_session()?;
+            }
+
             // If already speaking (triggered by 0x10), we skip RMS check and just write
             if !self.is_speaking {
                 let mut sum_sq = 0f64;
@@ -74,11 +81,8 @@ impl AudioProcessor {
                 }
             }
 
-            // In manual mode, we rely on 0x12 to stop.
-            // The 1000ms timeout is kept as a fallback if 0x12 is lost.
-            if self.is_speaking && self.last_activity.elapsed().as_millis() > 3000 {
-                finished_utterance = self.stop_manual_session()?;
-            }
+            // Update last_activity so continuous speaking doesn't trigger the timeout
+            self.last_activity = Instant::now();
         }
 
         Ok(finished_utterance)
@@ -86,7 +90,8 @@ impl AudioProcessor {
 
     pub fn start_manual_session(&mut self) -> Result<()> {
         if self.is_speaking {
-            return Ok(());
+            // If already speaking (e.g. 0x12 was lost), finalize the old session first
+            let _ = self.stop_manual_session();
         }
         self.is_speaking = true;
         self.last_activity = Instant::now();

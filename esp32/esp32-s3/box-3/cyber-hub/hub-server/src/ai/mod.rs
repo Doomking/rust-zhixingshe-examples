@@ -250,13 +250,14 @@ impl AiProcessor {
             }
         }
 
-        // 3. 状态机逻辑：判断 8 秒待命窗口并更新状态 (锁的作用域仅限此块)
+        // 3. 状态机逻辑：判断待命窗口并更新状态 (锁的作用域仅限此块)
         let final_command: String = {
             let now = std::time::Instant::now();
             let mut last_wake = self.last_wake_time.lock().unwrap();
 
             let is_in_window = if let Some(t) = *last_wake {
-                now.duration_since(t) < std::time::Duration::from_secs(8)
+                // 增加到 15 秒，以防本地 STT 或者长句子的推理时间较长
+                now.duration_since(t) < std::time::Duration::from_secs(15)
             } else {
                 false
             };
