@@ -1,0 +1,51 @@
+[package]
+name = "esp-client"
+version = "0.1.0"
+authors = ["Gustaf"]
+edition = "2021"
+rust-version = "1.77"
+default-run = "esp-client"
+
+
+[features]
+default = ["std", "esp-idf-svc/native"]
+
+pio = ["esp-idf-svc/pio"]
+std = ["alloc", "esp-idf-svc/binstart", "esp-idf-svc/std"]
+alloc = ["esp-idf-svc/alloc"]
+nightly = ["esp-idf-svc/nightly"]
+experimental = ["esp-idf-svc/experimental"]
+
+[dependencies]
+log = { version = "0.4", default-features = false }
+esp-idf-svc = { version = "0.52", default-features = false }
+esp-idf-sys = { version = "0.37" }
+esp-idf-hal = { version = "0.46" }
+anyhow = "1.0"
+mipidsi = "0.8.0"
+display-interface = "0.5.0"
+display-interface-spi = "0.5.0"
+embedded-graphics = "0.8.1"
+crossbeam-channel = "0.5.13"
+liquid-protocol = { path = "../liquid-protocol" }
+
+[build-dependencies]
+embuild = { version = "0.33", features = ["espidf"] }
+dotenvy = "0.15"
+
+[package.metadata.esp-idf-sys]
+extra_components = [
+  { component_dirs = ["components/esp-adf-libs"] }
+]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
+debug = true
+debug-assertions = true
+overflow-checks = false
