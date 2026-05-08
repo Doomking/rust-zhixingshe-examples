@@ -12,9 +12,9 @@ static LOGGED_FIRST_AUDIO_PCM: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy)]
 enum SessionState {
-    Connecting,
-    Handshaking,
-    Streaming,
+    Connecting,  // 正在连接服务器
+    Handshaking, // 正在进行协议握手
+    Streaming,   // 正在接收流媒体数据
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +34,7 @@ pub struct NetworkManager<'a> {
 }
 
 impl<'a> NetworkManager<'a> {
+    /// 连接到指定的 Wi-Fi 网络
     pub fn connect_wifi(
         modem: Modem<'a>,
         sysloop: EspSystemEventLoop,
@@ -50,38 +51,63 @@ impl<'a> NetworkManager<'a> {
             ..Default::default()
         }))?;
 
-        info!("Starting Wi-Fi...");
+        info!("正在启动 Wi-Fi...");
         wifi.start()?;
-        info!("Connecting to Wi-Fi...");
+        info!("正在连接 Wi-Fi...");
         wifi.connect()?;
 
-        // Wait for connection and IP address
+        // 等待连接成功并获取 IP 地址
         while !wifi.is_up()? {
             let config = wifi.get_configuration()?;
-            info!("Waiting for Wi-Fi to be up (acquire IP)... {:?}", config);
+            info!("正在等待 IP 分配... {:?}", config);
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         
-        info!("Wi-Fi connected and IP acquired successfully");
+        info!("Wi-Fi 连接成功，IP 已分配");
 
         Ok(Self { _wifi: wifi })
     }
 }
 
+/// 流同步恢复机制: 在数据错位时搜索 Magic Word ("LC") 重新定位帧头
+fn resync_stream(stream: &mut TcpStream) -> anyhow::Result<[u8; 12]> {
+    warn!("流同步丢失，正在搜索起始魔数 (Magic Word)...");
+    let mut window = [0u8; 2];
+    stream.read_exact(&mut window)?;
+
+    loop {
+        if window[0] == 0x4C && window[1] == 0x43 { // "L" 和 "C"
+            info!("找到起始魔数！正在重新同步...");
+            let mut header_rest = [0u8; 10];
+            stream.read_exact(&mut header_rest)?;
+            let mut full_header = [0u8; 12];
+            full_header[0..2].copy_from_slice(&window);
+            full_header[2..12].copy_from_slice(&header_rest);
+            return Ok(full_header);
+        }
+        // 滑动窗口继续搜索
+        window[0] = window[1];
+        let mut next_byte = [0u8; 1];
+        stream.read_exact(&mut next_byte)?;
+        window[1] = next_byte[0];
+    }
+}
+
+/// 启动 TCP 客户端并进行流数据分发
 pub fn start_tcp_client(
     server_addr: &str,
     video_tx: Sender<VideoPacket>,
     audio_tx: Sender<AudioPacket>,
 ) -> anyhow::Result<()> {
     let mut state = SessionState::Connecting;
-    info!("Session state: {:?}", state);
-    info!("Connecting to TCP server at {}", server_addr);
+    info!("会话状态: {:?}", state);
+    info!("正在连接 TCP 服务器: {}", server_addr);
     let mut stream = TcpStream::connect(server_addr)?;
-    info!("Connected to server!");
+    info!("服务器连接成功！");
 
-    // ---- Control plane: send HELLO, best-effort wait for ACK (backwards compatible) ----
+    // ---- 协议握手阶段: 发送设备参数并等待服务器确认 ----
     state = SessionState::Handshaking;
-    info!("Session state: {:?}", state);
+    info!("会话状态: {:?}", state);
     let hello = crate::protocol::ControlHello {
         version: crate::protocol::PROTOCOL_VERSION,
         media: crate::protocol::MediaParams {
@@ -106,7 +132,7 @@ pub fn start_tcp_client(
     let _ = stream.write_all(&hello_header.serialize());
     let _ = stream.write_all(&hello_payload);
 
-    // Small timeout to avoid stalling legacy servers.
+    // 等待服务器的 ACK (确认) 响应
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(300)));
     let mut ack_header_buf = [0u8; 12];
     if stream.read_exact(&mut ack_header_buf).is_ok() {
@@ -117,38 +143,28 @@ pub fn start_tcp_client(
                 let mut payload = vec![0u8; crate::protocol::CONTROL_PAYLOAD_LEN];
                 if stream.read_exact(&mut payload).is_ok() {
                     if let Some(ack) = crate::protocol::ControlAck::deserialize(&payload) {
+                        // 根据服务器反馈动态调整 A/V 同步参数
                         crate::sync::set_params(
                             ack.av.drop_late_ms as i32,
                             ack.av.wait_ahead_ms as i32,
                         );
                         info!(
-                            "Handshake ACK: v{} video={}x{}@{} q={} audio={}Hz chunk={} drop_late={} wait_ahead={}",
-                            ack.version,
-                            ack.media.video_w,
-                            ack.media.video_h,
-                            ack.media.video_fps,
-                            ack.media.jpeg_q,
-                            ack.media.audio_sample_rate,
-                            ack.media.audio_chunk_bytes,
-                            ack.av.drop_late_ms,
-                            ack.av.wait_ahead_ms
+                            "握手成功: v{} 视频={}x{}@{} q={} 音频={}Hz 缓冲区={}ms",
+                            ack.version, ack.media.video_w, ack.media.video_h, ack.media.video_fps,
+                            ack.media.jpeg_q, ack.media.audio_sample_rate, ack.av.drop_late_ms, ack.av.wait_ahead_ms
                         );
                     }
                 }
-            } else {
-                // Not an ACK: likely a legacy server immediately streaming media.
-                // We intentionally ignore this first header; media will continue afterwards.
             }
         }
     }
-    // Restore normal read timeout for streaming.
+    
+    // 设置正常的数据读取超时
     stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
     state = SessionState::Streaming;
-    info!("Session state: {:?}", state);
+    info!("会话状态: {:?}", state);
 
-    // Set read timeout
     let mut header_buf = [0u8; 12];
-    
     let mut total_bytes = 0;
     let mut start_time = std::time::Instant::now();
     let mut cnt_video = 0u32;
@@ -156,110 +172,110 @@ pub fn start_tcp_client(
     let mut cnt_ctrl = 0u32;
     let mut cnt_other = 0u32;
 
+    // ---- 数据接收主循环 ----
     loop {
-        // Read header
+        // 1. 读取 12 字节的帧头
         if let Err(e) = stream.read_exact(&mut header_buf) {
-            error!("Failed to read header: {}", e);
+            error!("无法读取帧头: {}", e);
             break;
         }
 
-        if let Some(header) = crate::protocol::FrameHeader::deserialize(&header_buf) {
-            // Read payload
-            let len = header.payload_len as usize;
-            
-            if len > 200_000 { // Reasonable max limit for frame
-                warn!("Payload too large: {}, dropping connection", len);
-                break;
-            }
-            
-            let mut payload_buf = vec![0u8; len];
-            if let Err(e) = stream.read_exact(&mut payload_buf) {
-                error!("Failed to read payload: {}", e);
-                break;
-            }
-
-            total_bytes += 12 + len;
-
-            match header.frame_type {
-                crate::protocol::FrameType::VideoJpeg => {
-                    cnt_video += 1;
-                    // Send payload to main thread
-                    if video_tx
-                        .send(VideoPacket {
-                            timestamp_ms: header.timestamp_ms,
-                            payload: payload_buf,
-                        })
-                        .is_err()
-                    {
-                        warn!("Video channel closed");
+        // 2. 解析帧头并处理可能的同步丢失
+        let header = match crate::protocol::FrameHeader::deserialize(&header_buf) {
+            Some(h) => h,
+            None => {
+                match resync_stream(&mut stream) {
+                    Ok(new_buf) => {
+                        header_buf = new_buf;
+                        crate::protocol::FrameHeader::deserialize(&header_buf).unwrap()
+                    }
+                    Err(e) => {
+                        error!("重新同步失败: {}", e);
                         break;
                     }
                 }
-                crate::protocol::FrameType::AudioPcm => {
-                    cnt_audio += 1;
-                    if !LOGGED_FIRST_AUDIO_PCM.swap(true, Ordering::Relaxed) {
-                        info!(
-                            "AudioPcm: first chunk received ({} bytes) — stream has audio",
-                            len
-                        );
-                    }
-                    if audio_tx
-                        .send(AudioPacket {
-                            timestamp_ms: header.timestamp_ms,
-                            payload: payload_buf,
-                        })
-                        .is_err()
-                    {
-                        warn!("Audio channel closed");
-                        break;
-                    }
-                }
-                crate::protocol::FrameType::ControlPing => {
-                    cnt_ctrl += 1;
-                }
-                crate::protocol::FrameType::ControlAck => {
-                    cnt_ctrl += 1;
-                    if let Some(ack) = crate::protocol::ControlAck::deserialize(&payload_buf) {
-                        crate::sync::set_params(
-                            ack.av.drop_late_ms as i32,
-                            ack.av.wait_ahead_ms as i32,
-                        );
-                        info!(
-                            "Runtime ACK: drop_late={} wait_ahead={}",
-                            ack.av.drop_late_ms, ack.av.wait_ahead_ms
-                        );
-                    }
-                }
-                _ => {
-                    cnt_other += 1;
-                }
             }
+        };
 
-            // Log stats every second (counts avoid bias: last frame in the window is often VideoJpeg)
-            if start_time.elapsed().as_secs() >= 1 {
-                info!(
-                    "Stream 1s: video={} audio={} ctrl={} other={} | last: {:?} ts={} len={} | {} KB/s",
-                    cnt_video,
-                    cnt_audio,
-                    cnt_ctrl,
-                    cnt_other,
-                    header.frame_type,
-                    header.timestamp_ms,
-                    len,
-                    total_bytes / 1024
-                );
-                cnt_video = 0;
-                cnt_audio = 0;
-                cnt_ctrl = 0;
-                cnt_other = 0;
-                total_bytes = 0;
-                start_time = std::time::Instant::now();
+        // 3. 读取负载数据 (Payload)
+        let len = header.payload_len as usize;
+        if len > 200_000 { // 防止异常大的数据包导致内存溢出
+            warn!("负载数据过大: {}, 尝试重新同步", len);
+            match resync_stream(&mut stream) {
+                Ok(new_buf) => {
+                    header_buf = new_buf;
+                    continue;
+                }
+                Err(e) => {
+                    error!("大负载后的重新同步失败: {}", e);
+                    break;
+                }
             }
-        } else {
-            error!("Invalid header received, dropping connection");
+        }
+
+        let mut payload_buf = vec![0u8; len];
+        if let Err(e) = stream.read_exact(&mut payload_buf) {
+            error!("无法读取负载数据: {}", e);
             break;
+        }
+
+        total_bytes += 12 + len;
+
+        // 4. 根据帧类型分发数据
+        match header.frame_type {
+            crate::protocol::FrameType::VideoJpeg => {
+                cnt_video += 1;
+                let _ = video_tx.send(VideoPacket {
+                    timestamp_ms: header.timestamp_ms,
+                    payload: payload_buf,
+                });
+            }
+            crate::protocol::FrameType::AudioPcm => {
+                cnt_audio += 1;
+                if !LOGGED_FIRST_AUDIO_PCM.swap(true, Ordering::Relaxed) {
+                    info!("音频流已上线: 收到首个 PCM 包 ({} bytes)", len);
+                }
+                let _ = audio_tx.send(AudioPacket {
+                    timestamp_ms: header.timestamp_ms,
+                    payload: payload_buf,
+                });
+            }
+            crate::protocol::FrameType::ControlPing => {
+                cnt_ctrl += 1;
+            }
+            crate::protocol::FrameType::ControlAck => {
+                cnt_ctrl += 1;
+                // 服务器运行期间也可能下发新的 A/V 同步参数
+                if let Some(ack) = crate::protocol::ControlAck::deserialize(&payload_buf) {
+                    crate::sync::set_params(
+                        ack.av.drop_late_ms as i32,
+                        ack.av.wait_ahead_ms as i32,
+                    );
+                    info!(
+                        "实时同步更新: 延迟容忍={}ms 休眠阈值={}ms",
+                        ack.av.drop_late_ms, ack.av.wait_ahead_ms
+                    );
+                }
+            }
+            _ => {
+                cnt_other += 1;
+            }
+        }
+
+        // 5. 每秒打印一次统计信息 (FPS, 码率等)
+        if start_time.elapsed().as_secs() >= 1 {
+            info!(
+                "流监控 (1s): 视频={} 音频={} 控制={} | 码率: {} KB/s",
+                cnt_video, cnt_audio, cnt_ctrl, total_bytes / 1024
+            );
+            cnt_video = 0;
+            cnt_audio = 0;
+            cnt_ctrl = 0;
+            cnt_other = 0;
+            total_bytes = 0;
+            start_time = std::time::Instant::now();
         }
     }
-    
+
     Ok(())
 }

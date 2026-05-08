@@ -82,13 +82,12 @@ impl Drop for AlignedBuf {
     }
 }
 
-pub struct DecodedFrame {
+pub struct FrameInfo {
     pub width: u32,
     pub height: u32,
-    pub rgb565_be: Vec<u16>,
 }
 
-pub fn decode_rgb565(jpeg_data: &[u8]) -> Result<DecodedFrame> {
+pub fn decode_rgb565_to(jpeg_data: &[u8], dst: &mut [u16]) -> Result<FrameInfo> {
     let mut cfg = jpeg_dec_config_t {
         output_type: JPEG_PIXEL_FORMAT_RGB565_LE,
         scale: jpeg_resolution_t { width: 0, height: 0 },
@@ -125,6 +124,14 @@ pub fn decode_rgb565(jpeg_data: &[u8]) -> Result<DecodedFrame> {
         bail!("jpeg_dec_get_outbuf_len failed: {}", out_len_ret);
     }
 
+    let px_count = (header.width as usize).saturating_mul(header.height as usize);
+    let expected_bytes = px_count.saturating_mul(2);
+    
+    if dst.len() < px_count {
+        bail!("destination buffer too small: dst={} need={}", dst.len(), px_count);
+    }
+
+    // esp_jpeg needs 16-byte aligned output buffer
     let outbuf_raw = unsafe { jpeg_calloc_align(out_len as usize, 16) };
     if outbuf_raw.is_null() {
         bail!("jpeg_calloc_align failed");
@@ -139,8 +146,6 @@ pub fn decode_rgb565(jpeg_data: &[u8]) -> Result<DecodedFrame> {
         bail!("jpeg_dec_process failed: {}", decode_ret);
     }
 
-    let px_count = (header.width as usize).saturating_mul(header.height as usize);
-    let expected_bytes = px_count.saturating_mul(2);
     if io.out_size <= 0 || (io.out_size as usize) < expected_bytes {
         return Err(anyhow!(
             "decoder output too small: out_size={} expected={}",
@@ -150,14 +155,14 @@ pub fn decode_rgb565(jpeg_data: &[u8]) -> Result<DecodedFrame> {
     }
 
     let out_slice = unsafe { core::slice::from_raw_parts(outbuf_guard.0 as *const u8, expected_bytes) };
-    let mut rgb565_be = Vec::with_capacity(px_count);
-    for pair in out_slice.chunks_exact(2) {
-        rgb565_be.push(u16::from_le_bytes([pair[0], pair[1]]).to_be());
+    
+    // Optimized byte order conversion (LE -> BE) directly into destination
+    for (i, pair) in out_slice.chunks_exact(2).enumerate() {
+        dst[i] = u16::from_le_bytes([pair[0], pair[1]]).to_be();
     }
 
-    Ok(DecodedFrame {
+    Ok(FrameInfo {
         width: header.width as u32,
         height: header.height as u32,
-        rgb565_be,
     })
 }
