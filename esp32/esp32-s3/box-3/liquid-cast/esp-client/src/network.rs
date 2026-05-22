@@ -149,7 +149,7 @@ pub fn start_tcp_client(
                             ack.av.wait_ahead_ms as i32,
                         );
                         info!(
-                            "握手成功: v{} 视频={}x{}@{} q={} 音频={}Hz 缓冲区={}ms",
+                            "握手成功: v{} 视频={}x{}@{} q={} 音频={}Hz 缓冲区={}/{}ms",
                             ack.version, ack.media.video_w, ack.media.video_h, ack.media.video_fps,
                             ack.media.jpeg_q, ack.media.audio_sample_rate, ack.av.drop_late_ms, ack.av.wait_ahead_ms
                         );
@@ -265,8 +265,8 @@ pub fn start_tcp_client(
         // 5. 每秒打印一次统计信息 (FPS, 码率等)
         if start_time.elapsed().as_secs() >= 1 {
             info!(
-                "流监控 (1s): 视频={} 音频={} 控制={} | 码率: {} KB/s",
-                cnt_video, cnt_audio, cnt_ctrl, total_bytes / 1024
+                "流监控 (1s): 视频={} 音频={} 控制={} 其他={} | 码率: {} KB/s",
+                cnt_video, cnt_audio, cnt_ctrl, cnt_other, total_bytes / 1024
             );
             cnt_video = 0;
             cnt_audio = 0;
