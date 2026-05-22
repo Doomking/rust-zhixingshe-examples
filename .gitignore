@@ -57,3 +57,7 @@ manga/**/output/
 *.pcm
 *.wav
 **/echokit_box/*
+*:wq
+:wq
+server.*
+*.server.pid

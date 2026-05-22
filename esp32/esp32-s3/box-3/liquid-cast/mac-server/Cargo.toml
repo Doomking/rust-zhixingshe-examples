@@ -1,0 +1,9 @@
+[package]
+name = "mac-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.37.0", features = ["full"] }
+dotenvy = "0.15"
+liquid-protocol = { path = "../liquid-protocol" }
